@@ -78,30 +78,48 @@ pkg_install() {
 }
 
 # =============================================================================
-# 1) Node.js (>=18) —— 构建前端所需
+# 1) Node.js (>=18) —— 仅在前端需要本地构建时（SKIP_BUILD=0）才安装
+#    注意：CentOS/RHEL 7 的 glibc 仅 2.17，无法运行 Node 18+，故生产部署
+#    统一使用仓库内预编译的 dist/（--skip-build），不在服务器上安装 Node。
 # =============================================================================
-need_node=1
-if command -v node >/dev/null 2>&1; then
-  NODE_MAJOR="$(node -v | sed 's/^v//' | cut -d. -f1)"
-  if [[ "$NODE_MAJOR" -ge 18 ]]; then need_node=0; log "已检测到 Node $(node -v)"; fi
-fi
-if [[ "$need_node" -eq 1 ]]; then
-  log "安装 Node.js 20 LTS ..."
-  case "$PKG" in
-    apt)
-      curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash -
-      pkg_install nodejs ;;
-    dnf|yum)
-      curl -fsSL https://rpm.nodesource.com/setup_20.x | $SUDO -E bash -
-      pkg_install nodejs ;;
-    *) err "请手动安装 Node.js >= 18 后重试"; exit 1 ;;
-  esac
-  log "Node 安装完成: $(node -v)"
+if [[ "$SKIP_BUILD" -eq 0 ]]; then
+  need_node=1
+  if command -v node >/dev/null 2>&1; then
+    NODE_MAJOR="$(node -v | sed 's/^v//' | cut -d. -f1)"
+    if [[ "$NODE_MAJOR" -ge 18 ]]; then need_node=0; log "已检测到 Node $(node -v)"; fi
+  fi
+  if [[ "$need_node" -eq 1 ]]; then
+    log "安装 Node.js 20 LTS ..."
+    case "$PKG" in
+      apt)
+        curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash -
+        pkg_install nodejs ;;
+      dnf|yum)
+        curl -fsSL https://rpm.nodesource.com/setup_20.x | $SUDO -E bash -
+        pkg_install nodejs ;;
+      *) err "请手动安装 Node.js >= 18 后重试"; exit 1 ;;
+    esac
+    log "Node 安装完成: $(node -v)"
+  fi
+else
+  log "跳过前端构建（--skip-build）：使用仓库内预编译 dist/，无需 Node.js"
 fi
 
 # =============================================================================
 # 2) Python3 + venv + pip
+#    CentOS/RHEL 7 自带 python3 仅 3.6，不满足 FastAPI(Python>=3.8)。
+#    通过 Software Collections(rh-python311) 提供 Python 3.11；
+#    Ubuntu/Debian 用系统 python3(>=3.8)。
 # =============================================================================
+if [[ "$PKG" == "yum" || "$PKG" == "dnf" ]]; then
+  if ! command -v python3.11 >/dev/null 2>&1; then
+    log "安装 RHSCL Python 3.11（CentOS/RHEL 默认 python3 过旧，无法满足 FastAPI）..."
+    pkg_install centos-release-scl
+    pkg_install rh-python311
+  fi
+  # 仅当前 shell 启用（后续 venv/依赖均用 3.11）；服务运行时用 venv 绝对路径，不依赖 SCL
+  source /opt/rh/rh-python311/enable 2>/dev/null || true
+fi
 if ! command -v python3 >/dev/null 2>&1; then
   log "安装 Python3 ..."
   case "$PKG" in

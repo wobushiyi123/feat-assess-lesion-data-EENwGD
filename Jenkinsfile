@@ -62,8 +62,11 @@ pipeline {
                     # 3) 复用现有 deploy.sh 完成：Node/前端构建/venv/.env/systemd/防火墙
                     #    deploy.sh 幂等：venv 复用、仅首次生成随机 SECRET_KEY、自动放行本地防火墙
                     cd ${DEPLOY_DIR}
-                    # 用 bash 显式执行，避免 deploy.sh 在 Linux 下缺 +x 位导致 "command not found"
-                    \$SUDO bash ./deploy.sh --port ${APP_PORT}
+                    # 清洗可能的 Windows 换行符（CRLF -> LF），避免 bash 解析错误（ECS git autocrlf 可能引入）
+                    \$SUDO sed -i 's/\r\$//' deploy.sh
+                    # 用 bash 显式执行；--skip-build 使用仓库内预编译 dist/
+                    # （CentOS7 glibc 2.17 无法运行 Node18+，Vite5 必须在开发机本地构建后随代码提交）
+                    \$SUDO bash ./deploy.sh --port ${APP_PORT} --skip-build
                 """
             }
         }

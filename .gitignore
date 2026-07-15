@@ -1,6 +1,7 @@
 # ===================== 依赖 / 构建产物 =====================
+# 注意：dist/ 需入库。CentOS7 的 glibc 2.17 无法运行 Node18+，Vite5 构建不了，
+# 生产部署直接复用仓库内预编译的 dist/（deploy.sh --skip-build），故 dist/ 要随代码提交。
 node_modules/
-dist/
 build/
 .next/
 coverage/
