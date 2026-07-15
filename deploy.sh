@@ -77,6 +77,47 @@ pkg_install() {
   esac
 }
 
+# 修复 CentOS/RHEL 7 EOL 后 base 仓库失效：重指向官方归档源 vault.centos.org
+fix_centos_base_repo() {
+  [[ -f /etc/yum.repos.d/CentOS-Base.repo ]] || return 0
+  $SUDO tee /etc/yum.repos.d/CentOS-Base.repo >/dev/null <<EOF
+[base]
+name=CentOS-7 - Base (vault)
+baseurl=https://vault.centos.org/centos/7/os/\$basearch/
+gpgcheck=0
+enabled=1
+
+[updates]
+name=CentOS-7 - Updates (vault)
+baseurl=https://vault.centos.org/centos/7/updates/\$basearch/
+gpgcheck=0
+enabled=1
+
+[extras]
+name=CentOS-7 - Extras (vault)
+baseurl=https://vault.centos.org/centos/7/extras/\$basearch/
+gpgcheck=0
+enabled=1
+EOF
+  log "已把 CentOS base/updates/extras 仓库重指向 vault.centos.org（CentOS 7 EOL 归档源）"
+}
+
+# 确保 C/C++ 编译工具链存在（源码构建 greenlet/uvloop/httptools 等扩展需要）
+ensure_c_toolchain() {
+  if command -v gcc >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1 && command -v make >/dev/null 2>&1; then
+    log "已检测到 C/C++ 工具链: gcc $(gcc -dumpversion)"
+    return 0
+  fi
+  log "安装 C/C++ 编译工具链 (gcc/g++/make) ..."
+  case "$PKG" in
+    apt) pkg_install build-essential ;;
+    dnf|yum)
+      fix_centos_base_repo
+      pkg_install gcc gcc-c++ make ;;
+    *) warn "未检测到 C/C++ 编译器，请手动安装 gcc/g++/make 后重试" ;;
+  esac
+}
+
 # =============================================================================
 # 1) Node.js (>=18) —— 仅在前端需要本地构建时（SKIP_BUILD=0）才安装
 #    注意：CentOS/RHEL 7 的 glibc 仅 2.17，无法运行 Node 18+，故生产部署
@@ -197,10 +238,16 @@ fi
 log "创建/更新 Python 虚拟环境 ..."
 cd "$BACKEND_DIR"
 [[ -d "$VENV_DIR" ]] || "$PYTHON_BIN" -m venv "$VENV_DIR"
-"$VENV_DIR/bin/pip" install --upgrade pip
-# 国内源加速；失败自动回退官方源
-"$VENV_DIR/bin/pip" install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple \
-  || "$VENV_DIR/bin/pip" install -r requirements.txt
+"$VENV_DIR/bin/pip" install --upgrade pip wheel setuptools
+# 源码构建（greenlet/uvloop/httptools 等 C 扩展）需要 C/C++ 编译器；
+# python-build-standalone 的 sysconfig 默认用 clang，ECS 上通常只有 gcc，
+# 故先确保 gcc/g++/make 已装（CentOS7 的 base 仓库已 EOL，会自动重指向 vault），
+# 再用 CC/CXX 强制走 gcc，避免缺 clang 导致构建失败。
+ensure_c_toolchain
+# 国内源加速；失败自动回退官方源；--prefer-binary 优先用预编译 wheel，缺则源码构建
+CC=gcc CXX=g++ "$VENV_DIR/bin/pip" install -r requirements.txt --prefer-binary \
+  -i https://pypi.tuna.tsinghua.edu.cn/simple \
+  || CC=gcc CXX=g++ "$VENV_DIR/bin/pip" install -r requirements.txt --prefer-binary
 log "后端依赖安装完成"
 
 # =============================================================================
