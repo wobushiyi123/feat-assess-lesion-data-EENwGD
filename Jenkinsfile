@@ -62,7 +62,8 @@ pipeline {
                     # 3) 复用现有 deploy.sh 完成：Node/前端构建/venv/.env/systemd/防火墙
                     #    deploy.sh 幂等：venv 复用、仅首次生成随机 SECRET_KEY、自动放行本地防火墙
                     cd ${DEPLOY_DIR}
-                    \$SUDO ./deploy.sh --port ${APP_PORT}
+                    # 用 bash 显式执行，避免 deploy.sh 在 Linux 下缺 +x 位导致 "command not found"
+                    \$SUDO bash ./deploy.sh --port ${APP_PORT}
                 """
             }
         }
