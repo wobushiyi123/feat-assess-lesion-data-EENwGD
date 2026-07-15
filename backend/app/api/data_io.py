@@ -2,11 +2,9 @@
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import SQLAlchemyError
 from datetime import datetime, timezone
 from typing import Dict, Any
 import io
-import traceback as tb
 from app.core.database import get_db
 from app.api.auth import get_current_user
 from app.models.database import User, Subject, Assessment, TargetLesion, NonTargetLesion, NewLesion, ImportBatch
@@ -78,8 +76,7 @@ async def import_excel(
 
     fmt = parsed_data.get("format", "simple")
 
-    try:
-        # ===== 0. 创建导入批次 =====
+    # ===== 0. 创建导入批次 =====
     batch = ImportBatch(
         user_id=current_user.id,
         filename=file.filename or "unknown.xlsx",
@@ -631,18 +628,6 @@ async def import_excel(
     batch.total_assessments = total_assessments
     batch.subjects_count = len(subjects_map)
     db.commit()
-
-    except SQLAlchemyError as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"数据库写入失败: {str(e)}")
-    except Exception as e:
-        db.rollback()
-        detail = f"导入处理异常: {type(e).__name__}: {str(e)}"
-        # 开发/调试环境附加完整 traceback（生产环境可去掉 tb.format_exc()）
-        import os
-        if os.environ.get("DEBUG", "").lower() in ("1", "true"):
-            detail += f"\n{tb.format_exc()}"
-        raise HTTPException(status_code=500, detail=detail)
 
     return {
         "message": "导入成功",
