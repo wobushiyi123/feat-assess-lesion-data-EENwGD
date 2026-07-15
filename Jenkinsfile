@@ -3,7 +3,7 @@
 // 部署拓扑：Jenkins 与阿里云 ECS 同一台机器（本机部署）
 //   1) 从 GitHub 检出代码到 Jenkins workspace
 //   2) rsync 同步到 /opt/recist（保留目标机的数据库与 venv，避免每次重建）
-//   3) sudo ./deploy.sh 完成：装 Node → 构建前端 → 建 venv → 写 .env → 注册 systemd → 放行本地防火墙
+//   3) sudo ./deploy.sh 完成：装 Node → 构建前端 → 建 venv → 写 .env → 初始化数据库(默认账号) → 注册 systemd → 放行本地防火墙
 //   4) 健康检查 /health
 //
 // 配置说明：
