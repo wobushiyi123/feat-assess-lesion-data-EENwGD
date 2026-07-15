@@ -316,6 +316,10 @@ EOF
 
   $SUDO systemctl daemon-reload
   $SUDO systemctl enable "$SERVICE_NAME"
+  # 关键：部署全程以 root(sudo) 运行，但 systemd 服务以 $RUN_USER(jenkins) 身份运行。
+  # 若不修正属主，$RUN_USER 将无法写入 SQLite 数据库 → 登录可过（只读），导入/写操作 500。
+  $SUDO chown -R "$RUN_USER:$RUN_USER" /opt/recist/
+  log "已将 /opt/recist/ 属主修正为 $RUN_USER（服务运行用户）"
   $SUDO systemctl restart "$SERVICE_NAME"
   log "服务已启动并设为开机自启 (systemctl status $SERVICE_NAME)"
 
