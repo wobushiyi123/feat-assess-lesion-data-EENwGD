@@ -106,69 +106,70 @@ else
 fi
 
 # =============================================================================
-# 2) Python3 + venv + pip
-#    CentOS/RHEL 7 自带 python3 仅 3.6，不满足 FastAPI(Python>=3.8)。
-#    通过 Software Collections(rh-python311) 提供 Python 3.11；
-#    Ubuntu/Debian 用系统 python3(>=3.8)。
+# 2) Python3 (>=3.8) + venv + pip
+#    策略：优先用系统 python3（>=3.8，Ubuntu22.04/AlmaLinux9 均满足）；
+#    若系统 python3 过旧（CentOS/RHEL 7 自带仅 3.6）或缺失，则下载
+#    python-build-standalone —— GitHub 上预编译的独立 Python 3.11，
+#    兼容 CentOS7 的 glibc 2.17，解压即用，完全不依赖 yum/SCL 归档源
+#    （CentOS7 EOL 后 SCL rh-python311 已无法从任何官方源安装）。
 # =============================================================================
-if [[ "$PKG" == "yum" || "$PKG" == "dnf" ]]; then
-  SCL_RH_REPO=/etc/yum.repos.d/CentOS-SCLo-scl-rh.repo
-  SCL_REPO=/etc/yum.repos.d/CentOS-SCLo-scl.repo
-  # 禁用 scl(非 rh) 仓库：CentOS 7 EOL 后其 mirrorlist 失效，任何 yum 事务加载它都会整体失败，
-  # 而本部署用不到它，故直接禁用（先禁，避免初始 yum 事务被拉垮）。
-  disable_scl() { [[ -f "$SCL_REPO" ]] && $SUDO sed -i -e 's|^enabled=.*|enabled=0|g' "$SCL_REPO"; }
-  disable_scl
-
-  if [[ ! -x /opt/rh/rh-python311/root/usr/bin/python3.11 ]]; then
-    log "安装 RHSCL Python 3.11（CentOS/RHEL 默认 python3 过旧，无法满足 FastAPI）..."
-
-    # CentOS 7 已 EOL：SCL 的 scl-rh 仓库 mirrorlist.centos.org 已停服。把该仓库重指向官方
-    # 归档源 vault.centos.org（先修可能残留的坏仓库，否则 yum 一加载就整个事务失败）。
-    fix_scl_rh() {
-      local b="$1"
-      [[ -f "$SCL_RH_REPO" ]] || return 0
-      $SUDO sed -i \
-        -e 's|^mirrorlist=|#mirrorlist=|g' \
-        -e "s|^#\?baseurl=.*|baseurl=${b}|g" \
-        -e 's|^gpgcheck=.*|gpgcheck=0|g' \
-        -e 's|^enabled=.*|enabled=1|g' \
-        "$SCL_RH_REPO"
-    }
-    fix_scl_rh "https://vault.centos.org/centos/7/sclo/\$basearch/rh/"   # 先修上次失败可能残留的坏仓库
-    pkg_install centos-release-scl          # 会重写 scl-rh / 写回 scl 仓库文件（broken mirrorlist）
-    disable_scl                              # 再次禁用 scl(非rh)，避免 rh-python311 安装事务被拉垮
-    fix_scl_rh "https://vault.centos.org/centos/7/sclo/\$basearch/rh/"   # 再修新写入的 scl-rh 仓库
-
-    # 装 rh-python311；若 vault/centos/7 不可达则回退 vault/7.9.2009
-    ok=0
-    for b in \
-      "https://vault.centos.org/centos/7/sclo/\$basearch/rh/" \
-      "https://vault.centos.org/7.9.2009/sclo/\$basearch/rh/" ; do
-      fix_scl_rh "$b"
-      if pkg_install rh-python311 2>/dev/null; then ok=1; break; fi
-      warn "通过 $b 安装 rh-python311 失败，尝试下一个归档源..."
-    done
-    [[ "$ok" -eq 1 ]] || { err "rh-python311 安装失败（SCL 归档源均不可达，建议换 AlmaLinux9/Ubuntu22.04 或改用 python-build-standalone）"; exit 1; }
-  fi
-  # 仅当前 shell 启用（后续 venv/依赖均用 3.11）；服务运行时用 venv 绝对路径，不依赖 SCL
-  source /opt/rh/rh-python311/enable 2>/dev/null || true
-  # enable 脚本缺失时的兜底：直接把 SCL 的 python 加入 PATH
-  [[ -x /opt/rh/rh-python311/root/usr/bin/python3.11 ]] \
-    && export PATH="/opt/rh/rh-python311/root/usr/bin:$PATH"
-fi
-if ! command -v python3 >/dev/null 2>&1; then
-  log "安装 Python3 ..."
-  case "$PKG" in
-    apt) pkg_install python3 python3-venv python3-pip ;;
-    dnf|yum) pkg_install python3 python3-pip ;;
-  esac
-fi
-# Debian/Ubuntu 的 venv 常需单独包
-if [[ "$PKG" == "apt" ]]; then
-  python3 -m venv --help >/dev/null 2>&1 || pkg_install python3-venv
-fi
-log "已检测到 $(python3 --version)"
 command -v curl >/dev/null 2>&1 || pkg_install curl
+
+PYTHON_BIN=""
+pick_python() {  # 选出一个 >=3.8 的解释器写入全局 PYTHON_BIN
+  local cand
+  for cand in python3.12 python3.11 python3.10 python3.9 python3.8 python3; do
+    if command -v "$cand" >/dev/null 2>&1 \
+       && "$cand" -c 'import sys;raise SystemExit(0 if sys.version_info[:2]>=(3,8) else 1)' 2>/dev/null; then
+      PYTHON_BIN="$(command -v "$cand")"; return 0
+    fi
+  done
+  return 1
+}
+
+# Debian/Ubuntu：系统 python3 一般已够新，仅补 venv/pip 包
+if [[ "$PKG" == "apt" ]]; then
+  pick_python || pkg_install python3 python3-venv python3-pip
+fi
+
+if ! pick_python; then
+  # 系统无 >=3.8 的 python（典型：CentOS7 自带 3.6）→ 下载 python-build-standalone
+  PBS_DIR=/opt/python311
+  if [[ ! -x "$PBS_DIR/bin/python3.11" ]]; then
+    log "系统 python3 过旧/缺失，下载 python-build-standalone Python 3.11（免 yum/SCL，兼容 CentOS7 glibc2.17）..."
+    arch="$(uname -m)"
+    case "$arch" in
+      x86_64|amd64)   PBS_ARCH="x86_64" ;;
+      aarch64|arm64)  PBS_ARCH="aarch64" ;;
+      *) err "不支持的架构: $arch（python-build-standalone 仅提供 x86_64/aarch64）"; exit 1 ;;
+    esac
+    PBS_VER="3.11.9"; PBS_TAG="20240814"
+    ASSET="cpython-${PBS_VER}+${PBS_TAG}-${PBS_ARCH}-unknown-linux-gnu-install_only.tar.gz"
+    TARBALL="/tmp/py311-standalone.tar.gz"
+    dl_ok=0
+    for url in \
+      "https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/${ASSET}" \
+      "https://ghproxy.net/https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/${ASSET}" \
+      "https://github.com/indygreg/python-build-standalone/releases/download/${PBS_TAG}/${ASSET}" \
+      "https://gh-proxy.com/https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/${ASSET}" ; do
+      log "尝试下载: $url"
+      if curl -fSL --retry 3 --connect-timeout 20 -o "$TARBALL" "$url"; then dl_ok=1; break; fi
+      warn "下载失败，尝试下一个镜像..."
+    done
+    [[ "$dl_ok" -eq 1 ]] || { err "python-build-standalone 下载失败（ECS 无法访问 GitHub/镜像）。可手动下载 $ASSET 传到 $TARBALL 后重跑，或改用 AlmaLinux9/Ubuntu22.04"; exit 1; }
+    # install_only tarball 解压出顶层目录 python/，移动到 PBS_DIR
+    $SUDO rm -rf /tmp/python "$PBS_DIR"
+    $SUDO tar -xzf "$TARBALL" -C /tmp
+    $SUDO mkdir -p "$(dirname "$PBS_DIR")"
+    $SUDO mv /tmp/python "$PBS_DIR"
+    rm -f "$TARBALL"
+    log "python-build-standalone 安装完成: $($PBS_DIR/bin/python3.11 --version)"
+  fi
+  export PATH="$PBS_DIR/bin:$PATH"
+  PYTHON_BIN="$PBS_DIR/bin/python3.11"
+fi
+
+log "使用 Python: $("$PYTHON_BIN" --version) ($PYTHON_BIN)"
 
 # =============================================================================
 # 3) 构建前端 -> dist/
@@ -195,7 +196,7 @@ fi
 # =============================================================================
 log "创建/更新 Python 虚拟环境 ..."
 cd "$BACKEND_DIR"
-[[ -d "$VENV_DIR" ]] || python3 -m venv "$VENV_DIR"
+[[ -d "$VENV_DIR" ]] || "$PYTHON_BIN" -m venv "$VENV_DIR"
 "$VENV_DIR/bin/pip" install --upgrade pip
 # 国内源加速；失败自动回退官方源
 "$VENV_DIR/bin/pip" install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple \
@@ -217,7 +218,7 @@ set_env() {  # set_env KEY VALUE —— 有则替换，无则追加
 }
 # 仅当仍是默认/占位密钥时才生成新随机密钥，避免每次部署导致已登录用户 token 失效
 if ! grep -qE '^SECRET_KEY=' "$ENV_FILE" || grep -qE '^SECRET_KEY=(your-secret-key-here-change-in-production)?\s*$' "$ENV_FILE"; then
-  NEW_SECRET="$(python3 -c 'import secrets;print(secrets.token_urlsafe(48))')"
+  NEW_SECRET="$("$VENV_DIR/bin/python" -c 'import secrets;print(secrets.token_urlsafe(48))')"
   set_env SECRET_KEY "$NEW_SECRET"
   log "已生成随机 SECRET_KEY"
 fi
