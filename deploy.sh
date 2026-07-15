@@ -112,23 +112,49 @@ fi
 #    Ubuntu/Debian 用系统 python3(>=3.8)。
 # =============================================================================
 if [[ "$PKG" == "yum" || "$PKG" == "dnf" ]]; then
-  if ! command -v python3.11 >/dev/null 2>&1; then
+  SCL_RH_REPO=/etc/yum.repos.d/CentOS-SCLo-scl-rh.repo
+  SCL_REPO=/etc/yum.repos.d/CentOS-SCLo-scl.repo
+  # 禁用 scl(非 rh) 仓库：CentOS 7 EOL 后其 mirrorlist 失效，任何 yum 事务加载它都会整体失败，
+  # 而本部署用不到它，故直接禁用（先禁，避免初始 yum 事务被拉垮）。
+  disable_scl() { [[ -f "$SCL_REPO" ]] && $SUDO sed -i -e 's|^enabled=.*|enabled=0|g' "$SCL_REPO"; }
+  disable_scl
+
+  if [[ ! -x /opt/rh/rh-python311/root/usr/bin/python3.11 ]]; then
     log "安装 RHSCL Python 3.11（CentOS/RHEL 默认 python3 过旧，无法满足 FastAPI）..."
-    pkg_install centos-release-scl
-    # CentOS 7 已 EOL：SCL 仓库的 mirrorlist 域名(mirrorlist.centos.org)已失效无法解析，
-    # 将 scl-rh 仓库重指向官方归档源 vault.centos.org，否则 rh-python311 无法安装。
-    if [[ -f /etc/yum.repos.d/CentOS-SCLo-scl-rh.repo ]]; then
+
+    # CentOS 7 已 EOL：SCL 的 scl-rh 仓库 mirrorlist.centos.org 已停服。把该仓库重指向官方
+    # 归档源 vault.centos.org（先修可能残留的坏仓库，否则 yum 一加载就整个事务失败）。
+    fix_scl_rh() {
+      local b="$1"
+      [[ -f "$SCL_RH_REPO" ]] || return 0
       $SUDO sed -i \
         -e 's|^mirrorlist=|#mirrorlist=|g' \
-        -e 's|^#\?baseurl=.*|baseurl=https://vault.centos.org/centos/7/sclo/$basearch/rh/|g' \
+        -e "s|^#\?baseurl=.*|baseurl=${b}|g" \
         -e 's|^gpgcheck=.*|gpgcheck=0|g' \
-        /etc/yum.repos.d/CentOS-SCLo-scl-rh.repo
-      log "已把 SCL-rh 仓库重指向 vault.centos.org（CentOS 7 EOL 归档源）"
-    fi
-    pkg_install rh-python311
+        -e 's|^enabled=.*|enabled=1|g' \
+        "$SCL_RH_REPO"
+    }
+    fix_scl_rh "https://vault.centos.org/centos/7/sclo/\$basearch/rh/"   # 先修上次失败可能残留的坏仓库
+    pkg_install centos-release-scl          # 会重写 scl-rh / 写回 scl 仓库文件（broken mirrorlist）
+    disable_scl                              # 再次禁用 scl(非rh)，避免 rh-python311 安装事务被拉垮
+    fix_scl_rh "https://vault.centos.org/centos/7/sclo/\$basearch/rh/"   # 再修新写入的 scl-rh 仓库
+
+    # 装 rh-python311；若 vault/centos/7 不可达则回退 vault/7.9.2009
+    ok=0
+    for b in \
+      "https://vault.centos.org/centos/7/sclo/\$basearch/rh/" \
+      "https://vault.centos.org/7.9.2009/sclo/\$basearch/rh/" ; do
+      fix_scl_rh "$b"
+      if pkg_install rh-python311 2>/dev/null; then ok=1; break; fi
+      warn "通过 $b 安装 rh-python311 失败，尝试下一个归档源..."
+    done
+    [[ "$ok" -eq 1 ]] || { err "rh-python311 安装失败（SCL 归档源均不可达，建议换 AlmaLinux9/Ubuntu22.04 或改用 python-build-standalone）"; exit 1; }
   fi
   # 仅当前 shell 启用（后续 venv/依赖均用 3.11）；服务运行时用 venv 绝对路径，不依赖 SCL
   source /opt/rh/rh-python311/enable 2>/dev/null || true
+  # enable 脚本缺失时的兜底：直接把 SCL 的 python 加入 PATH
+  [[ -x /opt/rh/rh-python311/root/usr/bin/python3.11 ]] \
+    && export PATH="/opt/rh/rh-python311/root/usr/bin:$PATH"
 fi
 if ! command -v python3 >/dev/null 2>&1; then
   log "安装 Python3 ..."
