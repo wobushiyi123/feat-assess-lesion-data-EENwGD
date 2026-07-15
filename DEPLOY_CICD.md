@@ -86,7 +86,23 @@ echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkin
   | sudo tee /etc/apt/sources.list.d/jenkins.list >/dev/null
 sudo apt-get update && sudo apt-get install -y jenkins
 
-# CentOS / RHEL / Rocky / Alma:
+# CentOS 7（注意用 yum 非 dnf；OpenJDK17 走 Adoptium 更稳）:
+# 1) Java 17（Adoptium Temurin 仓库）
+sudo bash -c 'cat > /etc/yum.repos.d/adoptium.repo' <<'EOF'
+[Adoptium]
+name=Adoptium
+baseurl=https://packages.adoptium.net/artifactory/rpm/centos/7/$basearch
+enabled=1
+gpgcheck=1
+gpgkey=https://packages.adoptium.net/artifactory/api/gpg/key/public
+EOF
+sudo yum install -y temurin-17-jdk
+# 2) Jenkins
+sudo wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat-stable/jenkins.repo
+sudo rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
+sudo yum install -y jenkins
+
+# CentOS 8+ / RHEL 8+ / Rocky / Alma:
 sudo dnf install -y java-17-openjdk
 sudo wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat-stable/jenkins.repo
 sudo rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
@@ -95,7 +111,9 @@ sudo dnf install -y jenkins
 # ---------- 关键：把 Jenkins 端口改成 9090，避免与应用 8080 冲突 ----------
 # Ubuntu（init 脚本）：
 sudo sed -i 's/^JENKINS_PORT=.*/JENKINS_PORT=9090/' /etc/default/jenkins 2>/dev/null
-# CentOS（systemd 单元）：
+# CentOS 7（配置文件 /etc/sysconfig/jenkins）：
+sudo sed -i 's/^JENKINS_PORT=.*/JENKINS_PORT="9090"/' /etc/sysconfig/jenkins 2>/dev/null
+# CentOS 8+ / RHEL（systemd 单元 Environment）：
 if [ -f /usr/lib/systemd/system/jenkins.service ]; then
   sudo sed -i 's/^Environment="JENKINS_PORT=.*/Environment="JENKINS_PORT=9090"/' /usr/lib/systemd/system/jenkins.service
 fi
