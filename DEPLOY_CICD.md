@@ -22,19 +22,19 @@
                                          ▼
                               ┌─────────────────────┐
                               │  阿里云 ECS /opt/recist│
-                              │  systemd 服务 recist   │  端口 8080（应用）
+                              │  systemd 服务 recist   │  端口 5173（应用）
                               │  单进程托管 前端+API   │
                               └──────────┬──────────┘
                                          │ 需放行
                                          ▼
-                              阿里云【安全组】入方向 8080/TCP
+                              阿里云【安全组】入方向 5173/TCP
                                   ▼
-                          浏览器 http://<ECS公网IP>:8080
+                          浏览器 http://<ECS公网IP>:5173
 ```
 
 **关键设计点**
 - 数据库 `backend/recist.db` 放在持久目录 `/opt/recist`，Jenkins 每次只同步**源码**，rsync 已 `--exclude` 数据库与 venv，升级不会清数据、不需要每次重建环境。
-- 端口冲突规避：**应用用 8080**（与 `deploy_linux.md` 一致），**Jenkins 改用 9090**（默认 8080 会冲突）。
+- 端口冲突规避：**应用用 5173**，**Jenkins 改用 9090**（默认 8080 会冲突）。
 - 前端构建、Python 环境、`.env`、systemd、本地防火墙全部由仓库内已有的 `deploy.sh` 完成，Jenkinsfile 只做“检出 + 同步 + 调 deploy.sh + 健康检查”，职责单一、易维护。
 
 ---
@@ -47,7 +47,7 @@
 | 公网 IP | 已绑定弹性公网 IP |
 | GitHub | 你已建好仓库（空仓库即可），拿到 HTTPS 或 SSH 地址 |
 | 本地 | 已 `git commit`（本手册第三步会提交好）；能 `git push` 到该仓库 |
-| 端口 | 安全组先放行 **9090**（Jenkins，限你办公 IP）与 **8080**（应用，公网） |
+| 端口 | 安全组先放行 **9090**（Jenkins，限你办公 IP）与 **5173**（应用，公网） |
 
 ---
 
@@ -163,9 +163,9 @@ sudo apt-get install -y git || sudo dnf install -y git
 2. Jenkins 会依次：
    - 检出 GitHub 代码到 workspace
    - `rsync` 同步到 `/opt/recist`（保留其中的 `recist.db` 与 `venv`）
-   - `sudo ./deploy.sh`：检测/安装 Node20 → `npm install` + `npm run build` → 建 Python venv + 装依赖 → 写 `backend/.env`（首次随机生成 `SECRET_KEY`、`DEBUG=False`、`SERVE_FRONTEND=True`）→ 注册并启动 systemd 服务 `recist` → 放行本地防火墙 8080
+   - `sudo ./deploy.sh`：检测/安装 Node20 → `npm install` + `npm run build` → 建 Python venv + 装依赖 → 写 `backend/.env`（首次随机生成 `SECRET_KEY`、`DEBUG=False`、`SERVE_FRONTEND=True`）→ 注册并启动 systemd 服务 `recist` → 放行本地防火墙 5173
    - `curl /health` 健康检查
-3. 控制台出现 **`部署成功 ✓ 公网访问: http://<ECS公网IP>:8080`** 即成功。
+3. 控制台出现 **`部署成功 ✓ 公网访问: http://<ECS公网IP>:5173`** 即成功。
 
 > 若 ECS 之前没装 Node，首次 `deploy.sh` 会用 `apt/dnf` 装 Node20（需联网），耗时稍长属正常。
 
@@ -177,17 +177,17 @@ sudo apt-get install -y git || sudo dnf install -y git
 - 阿里云控制台 → **云服务器 ECS** → 实例 → **安全组** → 配置规则 → **入方向** → 添加规则：
   | 规则 | 协议 | 端口范围 | 授权对象 | 说明 |
   |------|------|----------|----------|------|
-  | 应用 | TCP | `8080/8080` | `0.0.0.0/0`（公网）或限你 IP | 对外提供 RECIST 服务 |
+  | 应用 | TCP | `5173/5173` | `0.0.0.0/0`（公网）或限你 IP | 对外提供 RECIST 服务 |
   | 管理 | TCP | `9090/9090` | `<你办公IP>/32` | Jenkins 仅自己访问，切勿对公网开放 |
 - 出方向一般默认全通，无需改。
 
 **2) ECS 本地防火墙（deploy.sh 已尽力放行；按需确认）**
 - Ubuntu（ufw）：`sudo ufw status` 看是否 active；未 active 可不理（安全组已生效）。
-- CentOS（firewalld）：`sudo firewall-cmd --list-ports` 确认 `8080/tcp` 在列；不在则 `sudo firewall-cmd --permanent --add-port=8080/tcp && sudo firewall-cmd --reload`。
+- CentOS（firewalld）：`sudo firewall-cmd --list-ports` 确认 `5173/tcp` 在列；不在则 `sudo firewall-cmd --permanent --add-port=5173/tcp && sudo firewall-cmd --reload`。
 
 **3) 验证访问**
-- 浏览器打开 `http://<ECS公网IP>:8080` → 应看到登录页。
-- API 文档：`http://<ECS公网IP>:8080/docs`。
+- 浏览器打开 `http://<ECS公网IP>:5173` → 应看到登录页。
+- API 文档：`http://<ECS公网IP>:5173/docs`。
 
 ---
 
@@ -195,7 +195,7 @@ sudo apt-get install -y git || sudo dnf install -y git
 
 1. **改默认密码**：登录后把 `admin/admin123`、`doctor/doctor123` 改为强口令。
 2. **限制 Jenkins 暴露面**：9090 只对你的办公 IP 开放（安全组已配）；条件允许建议再加一层 Nginx 反向代理 + 基础认证。
-3. **HTTP 明文风险**：当前直接 IP:端口是明文，账号/JWT 裸传。公网长期使用强烈建议加 Nginx + HTTPS（见 `deploy_linux.md` 第五节示例），让 FastAPI 只监听 `127.0.0.1`、`PORT=8080`，对外只开 443。
+3. **HTTP 明文风险**：当前直接 IP:端口是明文，账号/JWT 裸传。公网长期使用强烈建议加 Nginx + HTTPS（见 `deploy_linux.md` 第五节示例），让 FastAPI 只监听 `127.0.0.1`、`PORT=5173`，对外只开 443。
 4. **SQLite 并发**：小团队内网足够；多人高频并发写入可能 `database is locked`，必要时换 PostgreSQL（需改连接代码）。
 
 ---

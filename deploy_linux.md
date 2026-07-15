@@ -29,7 +29,7 @@ ssh user@你的服务器IP
 cd /opt/recist
 chmod +x deploy.sh
 
-# 默认端口 8080，安装为 systemd 服务并开机自启
+# 默认端口 5173，安装为 systemd 服务并开机自启
 sudo ./deploy.sh
 
 # 可选参数：
@@ -102,7 +102,7 @@ server {
     ssl_certificate_key /path/to/privkey.pem;
 
     location / {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:5173;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -121,7 +121,7 @@ server {
 |------|-------------|
 | 访问空白页 | `dist/` 不存在或未构建；确认 `npm run build` 已生成 `dist/index.html` 且 `SERVE_FRONTEND=True` |
 | `/health` 不通、服务起不来 | `journalctl -u recist -n 50` 看日志；多为依赖未装或端口被占 |
-| 端口被占用 | `sudo lsof -i :8080` 查占用进程，或换 `--port` |
+| 端口被占用 | `sudo lsof -i :5173` 查占用进程，或换 `--port` |
 | 登录后不久被踢出 | `SECRET_KEY` 每次随机导致 token 失效；确认 `backend/.env` 里是固定密钥并重启 |
 | `database is locked` | SQLite 并发写限制；减少并发写或换 PostgreSQL |
 | 外网访问不了 | 云服务器**安全组**未放行该端口（脚本只管服务器本地防火墙，不管云厂商安全组） |

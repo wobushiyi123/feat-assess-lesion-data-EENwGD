@@ -6,7 +6,7 @@
 # 数据库：SQLite 单文件 (backend/recist.db)，无需额外数据库服务
 # 用法：
 #   chmod +x deploy.sh
-#   sudo ./deploy.sh                 # 默认端口 8080，安装为 systemd 服务并开机自启
+#   sudo ./deploy.sh                 # 默认端口 5173，安装为 systemd 服务并开机自启
 #   sudo ./deploy.sh --port 9000     # 指定端口
 #   sudo ./deploy.sh --skip-build    # 已有 dist，跳过前端构建
 #   sudo ./deploy.sh --no-service    # 不装 systemd，仅前台启动一次做验证
@@ -14,7 +14,7 @@
 set -euo pipefail
 
 # ---------- 可配置项（命令行参数会覆盖） ----------
-PORT=8080
+PORT=5173
 HOST="0.0.0.0"
 SERVICE_NAME="recist"
 SKIP_BUILD=0
@@ -115,6 +115,16 @@ if [[ "$PKG" == "yum" || "$PKG" == "dnf" ]]; then
   if ! command -v python3.11 >/dev/null 2>&1; then
     log "安装 RHSCL Python 3.11（CentOS/RHEL 默认 python3 过旧，无法满足 FastAPI）..."
     pkg_install centos-release-scl
+    # CentOS 7 已 EOL：SCL 仓库的 mirrorlist 域名(mirrorlist.centos.org)已失效无法解析，
+    # 将 scl-rh 仓库重指向官方归档源 vault.centos.org，否则 rh-python311 无法安装。
+    if [[ -f /etc/yum.repos.d/CentOS-SCLo-scl-rh.repo ]]; then
+      $SUDO sed -i \
+        -e 's|^mirrorlist=|#mirrorlist=|g' \
+        -e 's|^#\?baseurl=.*|baseurl=https://vault.centos.org/centos/7/sclo/$basearch/rh/|g' \
+        -e 's|^gpgcheck=.*|gpgcheck=0|g' \
+        /etc/yum.repos.d/CentOS-SCLo-scl-rh.repo
+      log "已把 SCL-rh 仓库重指向 vault.centos.org（CentOS 7 EOL 归档源）"
+    fi
     pkg_install rh-python311
   fi
   # 仅当前 shell 启用（后续 venv/依赖均用 3.11）；服务运行时用 venv 绝对路径，不依赖 SCL

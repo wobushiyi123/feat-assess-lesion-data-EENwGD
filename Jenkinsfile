@@ -10,7 +10,7 @@
 //   - 该 Job 请选择 “Pipeline script from SCM”，SCM 指向本 GitHub 仓库，
 //     Branch 填你的分支（如 feat-assess-lesion-data-EENwGD 或 master），
 //     Script Path 填 Jenkinsfile，Credentials 填能拉取该仓库的 GitHub 凭据。
-//   - Jenkins 默认端口 8080 与本项目 app 端口冲突，请在 ECS 上把 Jenkins 改为 9090。
+//   - 应用端口默认 5173（见 deploy.sh）；Jenkins 占用 9090，二者不冲突。
 //   - jenkins 用户需免密 sudo（部署脚本要用 systemctl / ufw / rsync）。
 // =============================================================================
 
@@ -19,7 +19,7 @@ pipeline {
 
     environment {
         DEPLOY_DIR = '/opt/recist'     // 持久化部署目录（数据库/venv 都在这里，不会被 workspace 清掉）
-        APP_PORT   = '8080'            // 应用端口（与 deploy_linux.md 一致）
+        APP_PORT   = '5173'            // 应用端口
     }
 
     options {
