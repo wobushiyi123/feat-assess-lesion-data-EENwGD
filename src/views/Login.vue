@@ -48,15 +48,6 @@
           </el-button>
         </el-form-item>
       </el-form>
-      <div class="login-tips">
-        <p class="tips-title">默认账号</p>
-        <div class="tips-grid">
-          <div class="tip-item">
-            <span class="tip-label">管理员</span>
-            <span class="tip-value">admin / admin123</span>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
 </template>
@@ -73,8 +64,8 @@ const formRef = ref()
 const loading = ref(false)
 const shake = ref(false)
 const form = ref({
-  username: 'admin',
-  password: 'admin123'
+  username: '',
+  password: ''
 })
 
 const rules = {
@@ -262,54 +253,6 @@ const handleLogin = async () => {
   transform: translateY(0);
 }
 
-.login-tips {
-  margin-top: 40px;
-  padding-top: 24px;
-  border-top: 1px solid var(--border-light);
-}
-
-.tips-title {
-  font-size: 13px;
-  color: var(--text-secondary);
-  text-align: center;
-  margin-bottom: 16px;
-}
-
-.tips-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-.tip-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 14px 16px;
-  background: var(--bg-color);
-  border-radius: var(--radius-md);
-  transition: all var(--transition-normal);
-  text-align: center;
-}
-
-.tip-item:hover {
-  background: var(--primary-light);
-}
-
-.tip-label {
-  font-size: 13px;
-  color: var(--text-regular);
-  font-weight: 600;
-  margin-bottom: 4px;
-}
-
-.tip-value {
-  font-size: 12px;
-  color: var(--primary-color);
-  font-family: 'Courier New', monospace;
-  font-weight: 500;
-}
-
 @media (max-width: 600px) {
   .login-container {
     padding: 20px;
@@ -322,10 +265,6 @@ const handleLogin = async () => {
 
   .login-header {
     margin-bottom: 32px;
-  }
-
-  .tips-grid {
-    grid-template-columns: 1fr;
   }
 }
 </style>
