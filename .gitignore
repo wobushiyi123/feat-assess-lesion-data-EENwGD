@@ -1,13 +1,45 @@
+# ===================== 依赖 / 构建产物 =====================
 node_modules/
-.DS_Store
 dist/
 build/
-.env
-.env.local
-*.log
-.vscode/
-.idea/
-__pycache__/
-*.pyc
 .next/
 coverage/
+
+# ===================== Python =====================
+__pycache__/
+*.pyc
+backend/venv/
+backend/__pycache__/
+backend/app/__pycache__/
+
+# ===================== 数据库（SQLite，运行时生成，禁止入库） =====================
+backend/*.db
+backend/*.db-journal
+backend/*.db.bak*
+backend/recist_assessment.db
+
+# ===================== 日志 =====================
+*.log
+backend/_uvicorn_*.log
+vite_*.log
+nul
+
+# ===================== 环境变量 / 密钥 =====================
+.env
+.env.local
+backend/.env
+backend/.env.*
+!.env.example
+!backend/.env.example
+
+# ===================== 项目内部记忆（非代码，禁止入库） =====================
+.workbuddy/
+
+# ===================== 样本数据（含受试者信息，禁止入库） =====================
+S01001*.xlsx
+*.xlsx.bak
+
+# ===================== 编辑器 / OS =====================
+.vscode/
+.idea/
+.DS_Store
