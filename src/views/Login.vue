@@ -43,7 +43,6 @@
         </el-form-item>
         <el-form-item>
           <el-button type="primary" size="large" :loading="loading" @click="handleLogin" class="login-btn">
-            <el-icon v-if="loading"><Loading /></el-icon>
             {{ loading ? '登录中...' : '登 录' }}
           </el-button>
         </el-form-item>
@@ -56,7 +55,6 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Loading } from '@element-plus/icons-vue'
 import { authApi } from '../api'
 
 const router = useRouter()
