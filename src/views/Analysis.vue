@@ -249,7 +249,7 @@
               <ul>
                 <li><strong>CR（完全缓解）</strong>：所有靶病灶消失。</li>
                 <li><strong>PR（部分缓解）</strong>：靶病灶 SLD 较基线下降 ≥30%。</li>
-                <li><strong>SD（疾病稳定）</strong>：未达 PR/PD 标准，即 SLD 较基线缩小不足 30% 且增长不足 20%。</li>
+                <li><strong>SD（疾病稳定）</strong>：未达 PR/PD 标准，即 SLD 较基线缩小不足 30%，且较研究期间最低值(nadir)增加不足 20% 或绝对值增加不足 5mm。</li>
               </ul>
             </div>
           </div>
