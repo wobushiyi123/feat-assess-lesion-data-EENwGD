@@ -500,9 +500,25 @@ const filteredMismatch = computed(() => {
   return rows
 })
 
+// 共享筛选：按受试者搜索 + 筛选状态（一致/不一致/无人工数据）过滤
+// 应用于概览展示、详细数据、导出；无筛选时返回全量
+const filterRows = (rows) => {
+  let r = rows
+  if (searchQuery.value) {
+    const q = searchQuery.value.toLowerCase()
+    r = r.filter(row => row.subject_id?.toLowerCase().includes(q))
+  }
+  if (filterStatus.value === 'match') r = r.filter(row => row.overall_match === true)
+  else if (filterStatus.value === 'mismatch') r = r.filter(row => row.overall_match === false)
+  else if (filterStatus.value === 'no_human') r = r.filter(row => !row.manual_overall_status)
+  return r
+}
+
 const filteredSubjectRows = computed(() => {
+  // 概览展示同样遵循右侧搜索/筛选；no_assessment（未评估）行在「全部/无人工数据/搜索命中」时保留
+  const rows = filterRows(assessmentTable.value)
   const grouped = {}
-  assessmentTable.value.forEach(row => {
+  rows.forEach(row => {
     const key = row.subject_db_id || row.subject_id
     if (!grouped[key]) {
       grouped[key] = { subject_id: row.subject_id, subject_db_id: row.subject_db_id, subject_name: row.subject_name, timepoints: [], no_assessment: false }
@@ -587,21 +603,52 @@ const goToStatDetail = (type) => {
   router.push({ path: `/stat-detail/${type}`, query: { batch: state.currentBatchId } })
 }
 
+// 受试者概览导出：依据当前搜索/筛选状态过滤后按受试者分组（取最新时间点）
+// 导出不含「未评估」占位行；无任何搜索与筛选时返回全量
+const subjectExportRows = computed(() => {
+  const rows = filterRows(assessmentTable.value).filter(r => !r.no_assessment)
+  const grouped = {}
+  rows.forEach(row => {
+    const key = row.subject_db_id || row.subject_id
+    if (!grouped[key]) {
+      grouped[key] = { subject_id: row.subject_id, subject_db_id: row.subject_db_id, subject_name: row.subject_name, timepoints: [] }
+    }
+    grouped[key].timepoints.push(row)
+  })
+  return Object.values(grouped).map(g => {
+    if (g.timepoints.length === 0) return { ...g, timepoints: [] }
+    g.timepoints.sort((a, b) => (a.cycle_number || 0) - (b.cycle_number || 0))
+    return { ...g, timepoints: [g.timepoints[g.timepoints.length - 1]] }
+  })
+})
+
 const exportRows = computed(() => {
-  if (activeTab.value === 'overview') return filteredSubjectRows.value
+  if (activeTab.value === 'overview') return subjectExportRows.value
   if (activeTab.value === 'mismatch') return filteredMismatch.value
   return filteredTable.value
 })
 
 const exportType = computed(() => activeTab.value === 'overview' ? 'subjects' : 'assessments')
+
+// 导出文件名包含的筛选后缀：有搜索/筛选时附加，便于保存后区分
+const exportFilterSuffix = computed(() => {
+  const parts = []
+  if (searchQuery.value) parts.push(`搜索${searchQuery.value}`)
+  if (filterStatus.value) {
+    const m = { match: '一致', mismatch: '不一致', no_human: '无人工数据' }
+    parts.push(`筛选${m[filterStatus.value] || filterStatus.value}`)
+  }
+  return parts.length ? `_${parts.join('_')}` : ''
+})
+
 const exportFilename = computed(() => {
   const map = { overview: '受试者概览', detail: '详细数据', mismatch: '不一致汇总' }
-  return map[activeTab.value] || '评估数据'
+  return (map[activeTab.value] || '评估数据') + exportFilterSuffix.value
 })
 
 const exportTitle = computed(() => {
   const map = { overview: '受试者概览', detail: '评估详细数据', mismatch: '不一致汇总' }
-  return map[activeTab.value] || '评估报告'
+  return (map[activeTab.value] || '评估报告') + exportFilterSuffix.value
 })
 </script>
 

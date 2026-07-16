@@ -73,7 +73,8 @@ const navItems = [
     { path: '/upload', label: '数据导入' },
     { path: '/subjects', label: '受试者' },
     { path: '/analysis', label: '智能分析' },
-    { path: '/standard', label: '评估标准' }
+    { path: '/standard', label: '评估标准' },
+    { path: '/help', label: '使用帮助' }
   ]
 
 const user = JSON.parse(localStorage.getItem('user') || '{}')

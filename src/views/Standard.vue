@@ -7,9 +7,9 @@
 
     <div class="standard-content">
 
-      <!-- ═══════════════ 6.1 靶病灶判定 ═══════════════ -->
+      <!-- ═══════════════ 靶病灶判定 ═══════════════ -->
       <div class="section target-section">
-        <h3 class="section-title">6.1 靶病灶判定</h3>
+        <h3 class="section-title">靶病灶判定</h3>
 
         <!-- 判定标准表 -->
         <div class="standard-table">
@@ -49,66 +49,11 @@
           <div class="formula-line"><code>PR：(SLD_baseline − SLD_now) / SLD_baseline ≥ 0.30</code></div>
           <div class="formula-line"><code>PD：(SLD_now − SLD_nadir) / SLD_nadir ≥ 0.20 AND (SLD_now − SLD_nadir) ≥ 5 mm → 或 出现新病灶</code></div>
         </div>
-
-        <!-- 三个极易出错的细节 -->
-        <div class="warning-box">
-          <h4>⚠️ 三个极易出错的细节</h4>
-          <ol>
-            <li><strong>PD 参照是 nadir（最低值），不是基线。</strong><br/>
-              例：基线 100 → 最低 50 → 复查 60：相对最低值 +20%（=+60）且绝对 +10mm≥5 → 判 PD。<br/>
-              若回升到 58（+16%&lt;20%）则仍 SD。
-            </li>
-            <li><strong>PD 双条件缺一不可：</strong>既需相对 +20%，又需绝对 +5 mm。<br/>小病灶微小波动不应误判为进展。</li>
-            <li><strong>新病灶 = PD，</strong>无论大小、无论出现在何处（含 FDG-PET 发现）。</li>
-          </ol>
-        </div>
       </div>
 
-      <!-- ═══════════════ 6.2 非靶病灶判定 ═══════════════ -->
-      <div class="section non-target-section">
-        <h3 class="section-title">6.2 非靶病灶判定</h3>
-
-        <div class="standard-table">
-          <table>
-            <thead>
-              <tr><th>类别</th><th>判定标准</th></tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><span class="badge cr">CR</span></td>
-                <td>所有非靶病灶消失；所有淋巴结短轴 &lt; 10 mm</td>
-              </tr>
-              <tr>
-                <td><span class="badge sd">非CR/非PD (IR/SD)</span></td>
-                <td>存在 ≥1 个非靶病灶，或肿瘤标志物持续高于正常</td>
-              </tr>
-              <tr>
-                <td><span class="badge pd">PD</span></td>
-                <td>已有非靶病灶明确进展，或出现任何新病灶</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div class="note-box">
-          <p><strong>非靶 PD 的"明确"二字：</strong>非靶病灶的轻微增大不构成 PD，必须是<strong>明确（unequivocal）进展</strong>（如胸水从少量到大量、淋巴管炎从局限到弥漫）。系统实现时切忌把非靶尺寸小幅变化自动判为 PD。</p>
-        </div>
-      </div>
-
-      <!-- ═══════════════ 6.3 确认规则 ═══════════════ -->
-      <div class="section confirmation-section">
-        <h3 class="section-title">6.3 确认规则（Confirmation）</h3>
-
-        <ul class="confirm-list">
-          <li>在<strong>非随机试验</strong>中，<strong>CR 与 PR</strong>须在治疗后 <strong>≥4 周</strong>复查确认。</li>
-          <li><strong>随机试验</strong>可由方案决定是否需确认（多数不强制），但确认性的 PR 在后续访视中视为<strong>"持续 PR"</strong>，直至满足 PD 标准——后续判定参照 <strong>nadir 而非基线</strong>。</li>
-          <li><strong>PD 一般不需确认</strong>（除非征象模棱两可）。</li>
-        </ul>
-      </div>
-
-      <!-- ═══════════════ 判定流程图（图1）═══════════════ -->
+      <!-- ═══════════════ 靶病灶疗效判定流程图 ════════════════ -->
       <div class="section flowchart-section">
-        <h3 class="section-title">图 1 · 靶病灶疗效判定流程图</h3>
+        <h3 class="section-title">靶病灶疗效判定流程图</h3>
 
         <div class="flowchart">
           <div class="fc-node fc-start">计算 SLD（最长径之和）</div>
@@ -145,6 +90,48 @@
         </div>
 
         <p class="flowchart-note">靶病灶疗效判定依赖 <strong>SLD 与 nadir 的比较</strong>：CR 优先判定，其次依次为 PR、PD，余者为 SD。</p>
+      </div>
+
+      <!-- ═══════════════ 非靶病灶判定 ═══════════════ -->
+      <div class="section non-target-section">
+        <h3 class="section-title">非靶病灶判定</h3>
+
+        <div class="standard-table">
+          <table>
+            <thead>
+              <tr><th>类别</th><th>判定标准</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="badge cr">CR</span></td>
+                <td>所有非靶病灶消失；所有淋巴结短轴 &lt; 10 mm</td>
+              </tr>
+              <tr>
+                <td><span class="badge sd">非CR/非PD (IR/SD)</span></td>
+                <td>存在 ≥1 个非靶病灶，或肿瘤标志物持续高于正常</td>
+              </tr>
+              <tr>
+                <td><span class="badge pd">PD</span></td>
+                <td>已有非靶病灶明确进展，或出现任何新病灶</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="note-box">
+          <p><strong>非靶 PD 的"明确"二字：</strong>非靶病灶的轻微增大不构成 PD，必须是<strong>明确（unequivocal）进展</strong>（如胸水从少量到大量、淋巴管炎从局限到弥漫）。系统实现时切忌把非靶尺寸小幅变化自动判为 PD。</p>
+        </div>
+      </div>
+
+      <!-- ═══════════════ 确认规则 ═══════════════ -->
+      <div class="section confirmation-section">
+        <h3 class="section-title">确认规则（Confirmation）</h3>
+
+        <ul class="confirm-list">
+          <li>在<strong>非随机试验</strong>中，<strong>CR 与 PR</strong>须在治疗后 <strong>≥4 周</strong>复查确认。</li>
+          <li><strong>随机试验</strong>可由方案决定是否需确认（多数不强制），但确认性的 PR 在后续访视中视为<strong>"持续 PR"</strong>，直至满足 PD 标准——后续判定参照 <strong>nadir 而非基线</strong>。</li>
+          <li><strong>PD 一般不需确认</strong>（除非征象模棱两可）。</li>
+        </ul>
       </div>
 
       <!-- ═══════════════ 整体评价决策矩阵 ═══════════════ -->

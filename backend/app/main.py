@@ -2,6 +2,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+# Starlette 不同版本类名不一致：<1.0 为 GzipMiddleware，≥1.0 为 GZipMiddleware，做兼容导入并统一别名
+try:
+    from starlette.middleware.gzip import GZipMiddleware as GzipMiddleware
+except ImportError:  # pragma: no cover - 旧版 starlette
+    from starlette.middleware.gzip import GzipMiddleware  # type: ignore
 import logging
 import os
 from sqlalchemy import text
@@ -48,6 +53,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Gzip 压缩：压缩 HTML/JS/CSS/JSON 响应，显著降低 ECS 部署时的首屏传输体积（最低 500 字节才压缩）
+app.add_middleware(GzipMiddleware, minimum_size=500)
+
 # 注册路由
 app.include_router(auth.router)
 app.include_router(subjects.router)
@@ -63,7 +71,8 @@ async def root():
         from pathlib import Path
         _idx = Path(__file__).resolve().parent.parent.parent / "dist" / "index.html"
         if _idx.exists():
-            return FileResponse(str(_idx))
+            # 不缓存 index.html，保证新发布立即可见
+            return FileResponse(str(_idx), headers={'Cache-Control': 'no-cache'})
     return {
         "app": settings.APP_NAME,
         "version": "1.0.0",
@@ -184,13 +193,26 @@ if os.getenv("SERVE_FRONTEND"):
             # 单一路由托管前端：真实静态文件直接返回；其余 GET 请求（含刷新子路由）
             # 一律回退 index.html，交给 Vue Router(history 模式) 接管。
             # 注意：/api、/docs、/health 等接口路由已在前面注册并优先匹配，不会进入此处。
+            # 可长期缓存的静态资源扩展名（多为带 hash 的文件名，内容不变则 URL 也不变）
+            _CACHEABLE_EXT = {
+                '.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.svg',
+                '.ico', '.woff', '.woff2', '.ttf', '.eot', '.webp',
+            }
+
             @app.get("/{full_path:path}")
             async def serve_frontend(full_path: str):
                 _file = _dist_dir / full_path
                 if full_path and _file.exists() and _file.is_file():
-                    return FileResponse(str(_file))
+                    # 带 hash 的静态资源：强缓存一年（immutable），部署后文件名变化自动失效
+                    if _file.suffix.lower() in _CACHEABLE_EXT:
+                        return FileResponse(
+                            str(_file),
+                            headers={'Cache-Control': 'public, max-age=31536000, immutable'}
+                        )
+                    # HTML/JSON 等：不缓存，保证新发布立即可见
+                    return FileResponse(str(_file), headers={'Cache-Control': 'no-cache'})
                 if _index_html.exists():
-                    return FileResponse(str(_index_html))
+                    return FileResponse(str(_index_html), headers={'Cache-Control': 'no-cache'})
                 return JSONResponse(
                     {"detail": "frontend not built, please run: npm run build"},
                     status_code=404,

@@ -85,7 +85,7 @@ const onPdf = () => {
     return
   }
   if (props.type === 'subjects') {
-    exportSubjectsToPDF(props.rows, props.subtitle || '受试者概览')
+    exportSubjectsToPDF(props.rows, props.title || '受试者概览')
   } else {
     exportAssessmentsToPDF(props.title, props.rows, props.subtitle)
   }

@@ -625,6 +625,30 @@ async def import_excel(
 
             total_assessments += 1
 
+    # ===== 第二遍：依据全时间线补全 RECIST 1.1 §6.3 确认规则说明 =====
+    # 各受试者全部评估已在上方写入（已 flush），此处按时间线判定 CR/PR 是否需要/已确认，
+    # 仅追加确认说明到 overall_reason（不改变存储状态）。失败不影响主流程。
+    try:
+        for subj_id, tp_info in subject_timepoints.items():
+            subject_db_id = subjects_map.get(subj_id)
+            if not subject_db_id:
+                continue
+            all_subj = db.query(Assessment).filter(
+                Assessment.subject_id == subject_db_id,
+                Assessment.batch_id == batch.id
+            ).order_by(Assessment.assessment_date, Assessment.id).all()
+            for a in all_subj:
+                if a.overall_status not in ("CR", "PR"):
+                    continue
+                if "确认规则" in (a.overall_reason or ""):
+                    continue
+                confirmation = RecistEngine.build_confirmation(all_subj, a, a.overall_status)
+                suffix = RecistEngine.confirmation_note(a.overall_status, confirmation)
+                if suffix:
+                    a.overall_reason = (a.overall_reason or "") + suffix
+    except Exception as exc:
+        logger.warning("导入时补全确认规则说明失败（不影响保存）: %s", exc)
+
     batch.total_assessments = total_assessments
     batch.subjects_count = len(subjects_map)
     db.commit()

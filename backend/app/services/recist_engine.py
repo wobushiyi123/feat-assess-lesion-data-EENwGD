@@ -75,6 +75,7 @@ RECIST 1.1 疗效评估算法
 from typing import List, Dict, Any, Tuple, Optional
 from dataclasses import dataclass, field
 from enum import Enum
+from datetime import datetime, timedelta, timezone
 
 
 def _fmt_tl(lesions: List[Dict[str, Any]]) -> str:
@@ -96,6 +97,27 @@ def _fmt_ntl(lesions: List[Dict[str, Any]]) -> str:
         st = l.get("status") or "持续存在"
         items.append(f"{nm}:{st}")
     return "；".join(items)
+
+
+def _fmt_tl_lines(lesions: List[Dict[str, Any]], unit: str = "mm") -> str:
+    """把靶病灶列表格式化为逐行明细（用于详细理由）：· 名称：基线 X → 当前 Y mm"""
+    lines = []
+    for l in lesions:
+        nm = l.get("name") or l.get("location") or "病灶"
+        b = float(l.get("baseline_size") or 0)
+        c = float(l.get("current_size") or 0)
+        lines.append(f"  · {nm}：基线 {b:.1f} → 当前 {c:.1f} {unit}")
+    return "\n".join(lines) if lines else "  （无靶病灶明细）"
+
+
+def _fmt_ntl_lines(lesions: List[Dict[str, Any]]) -> str:
+    """把非靶病灶列表格式化为逐行明细（用于详细理由）：· 名称：状态"""
+    lines = []
+    for l in lesions:
+        nm = l.get("name") or l.get("location") or "病灶"
+        st = l.get("status") or "持续存在"
+        lines.append(f"  · {nm}：{st}")
+    return "\n".join(lines) if lines else "  （无非靶病灶明细）"
 
 
 class RecistStatus(str, Enum):
@@ -186,10 +208,10 @@ class RecistEngine:
             return RecistStatus.NE, "无靶病灶数据", 0.0, 0.0, 0.0, None, False
 
         if baseline_sum == 0:
-            return RecistStatus.NE, "基线数据缺失", baseline_sum, current_sum, 0.0, None, False
+            return RecistStatus.NE, "基线数据缺失（靶病灶基线最长径之和为 0，无法计算 SLD 变化率）", baseline_sum, current_sum, 0.0, None, False
 
         change_percent = ((current_sum - baseline_sum) / baseline_sum) * 100
-        detail = _fmt_tl(target_lesions)
+        detail_lines = _fmt_tl_lines(target_lesions)
 
         # nadir: 历史最低 SLD，默认等于基线
         effective_nadir = nadir_sum if nadir_sum is not None else baseline_sum
@@ -200,12 +222,19 @@ class RecistEngine:
             change_from_nadir_pct = None
             nadir_absolute_change = 0.0
 
+        header = "【靶病灶评估 · RECIST 1.1 §6.1】"
+
         # 新病灶标记（靶病灶层面记录，整体评估时统一判断）
         if has_new_lesion:
+            reason = (
+                f"{header}\n"
+                f"病灶明细（最长径，单位 mm）：\n{detail_lines}\n"
+                f"计算公式：PD ⇒ 出现任何新病灶（无论大小、部位或发现方式）即一票否决为疾病进展(PD)。\n"
+                f"检出新病灶。依据 RECIST 1.1 新病灶规则：治疗过程中新出现的任何病灶即判为疾病进展(PD)。\n"
+                f"判定：靶病灶 → 疾病进展(PD)。"
+            )
             return (
-                RecistStatus.PD,
-                f"[{detail}] 检出新病灶。依据 RECIST 1.1 新病灶规则（任何新病灶出现即一票否决为 PD）："
-                f"整体疗效判为疾病进展(PD)。",
+                RecistStatus.PD, reason,
                 baseline_sum, current_sum, change_percent,
                 change_from_nadir_pct, False
             )
@@ -213,11 +242,16 @@ class RecistEngine:
         # 所有靶病灶消失 → CR
         # 标准：所有靶病灶消失；所有病理淋巴结短轴 < 10 mm
         if current_sum == 0:
+            reason = (
+                f"{header}\n"
+                f"计算公式：CR ⇒ 所有靶病灶消失（SLD_当前 = 0），且病理淋巴结短轴 < {cls.LYMPH_NODE_SHORT_AXIS_MAX:.0f} mm\n"
+                f"病灶明细（最长径，单位 mm）：\n{detail_lines}\n"
+                f"SLD_当前 = {current_sum:.1f} mm ⇒ 所有靶病灶最长径之和为 0（全部消失）。\n"
+                f"依据 RECIST 1.1 §6.1：所有靶病灶消失（淋巴结短轴 < {cls.LYMPH_NODE_SHORT_AXIS_MAX:.0f} mm），"
+                f"判定为完全缓解(CR)。"
+            )
             return (
-                RecistStatus.CR,
-                f"[{detail}] 所有靶病灶最长(非淋巴结)/最短(淋巴结)直径之和(SLD)=0mm。"
-                f"依据 RECIST 1.1 靶病灶完全缓解(CR)标准：所有靶病灶消失"
-                f"（且病理淋巴结短轴<{cls.LYMPH_NODE_SHORT_AXIS_MAX:.0f}mm），判为 CR。",
+                RecistStatus.CR, reason,
                 baseline_sum, current_sum, change_percent,
                 change_from_nadir_pct, False
             )
@@ -227,34 +261,62 @@ class RecistEngine:
         if (change_from_nadir_pct is not None
                 and change_from_nadir_pct >= cls.PD_PERCENT_THRESHOLD
                 and nadir_absolute_change >= cls.PD_ABSOLUTE_THRESHOLD):
+            reason = (
+                f"{header}\n"
+                f"计算公式：PD ⇒ (SLD_当前 − SLD_最低点) / SLD_最低点 × 100% ≥ {cls.PD_PERCENT_THRESHOLD:.0f}% "
+                f"且 (SLD_当前 − SLD_最低点) ≥ {cls.PD_ABSOLUTE_THRESHOLD:.0f} mm\n"
+                f"病灶明细（最长径，单位 mm）：\n{detail_lines}\n"
+                f"SLD_基线 = {baseline_sum:.1f} mm\n"
+                f"SLD_最低点(nadir，含基线及历史各期最小值) = {effective_nadir:.1f} mm\n"
+                f"SLD_当前 = {current_sum:.1f} mm\n"
+                f"(SLD_当前 − SLD_最低点) / SLD_最低点 × 100% = ({current_sum:.1f} − {effective_nadir:.1f}) / {effective_nadir:.1f} × 100% = {change_from_nadir_pct:.1f}%\n"
+                f"SLD_当前 − SLD_最低点 = {current_sum:.1f} − {effective_nadir:.1f} = {nadir_absolute_change:.1f} mm\n"
+                f"{change_from_nadir_pct:.1f}% ≥ {cls.PD_PERCENT_THRESHOLD:.0f}% 且 {nadir_absolute_change:.1f} mm ≥ {cls.PD_ABSOLUTE_THRESHOLD:.0f} mm ⇒ 满足 PD 双条件。\n"
+                f"依据 RECIST 1.1 §6.1：靶病灶 SLD 较研究期间最低点增加 ≥{cls.PD_PERCENT_THRESHOLD:.0f}% "
+                f"且绝对值增加 ≥{cls.PD_ABSOLUTE_THRESHOLD:.0f} mm（参照 nadir 而非基线），判定为疾病进展(PD)。"
+            )
             return (
-                RecistStatus.PD,
-                f"[{detail}] 基线SLD={baseline_sum:.1f}mm，当前SLD={current_sum:.1f}mm，"
-                f"Nadir(研究期间最小值,含基线)={effective_nadir:.1f}mm；"
-                f"SLD较nadir增加{change_from_nadir_pct:.1f}%（≥+20%）且绝对值增加{nadir_absolute_change:.1f}mm（≥+5mm）。"
-                f"依据 RECIST 1.1 靶病灶疾病进展(PD)标准（双条件：相对↑≥20% 且 绝对↑≥5mm），判为 PD。",
+                RecistStatus.PD, reason,
                 baseline_sum, current_sum, change_percent,
                 change_from_nadir_pct, False
             )
 
         # 部分缓解（SLD较基线下降≥30%）
         if change_percent <= cls.PR_THRESHOLD:
+            reason = (
+                f"{header}\n"
+                f"计算公式：PR ⇒ (SLD_基线 − SLD_当前) / SLD_基线 × 100% ≥ {abs(cls.PR_THRESHOLD):.0f}%\n"
+                f"病灶明细（最长径，单位 mm）：\n{detail_lines}\n"
+                f"SLD_基线 = {baseline_sum:.1f} mm\n"
+                f"SLD_当前 = {current_sum:.1f} mm\n"
+                f"(SLD_基线 − SLD_当前) / SLD_基线 × 100% = ({baseline_sum:.1f} − {current_sum:.1f}) / {baseline_sum:.1f} × 100% = {abs(change_percent):.1f}%\n"
+                f"{abs(change_percent):.1f}% ≥ {abs(cls.PR_THRESHOLD):.0f}% ⇒ 满足 PR 判定条件。\n"
+                f"依据 RECIST 1.1 §6.1：靶病灶 SLD 较基线下降 ≥{abs(cls.PR_THRESHOLD):.0f}%，判定为部分缓解(PR)。"
+            )
             return (
-                RecistStatus.PR,
-                f"[{detail}] 基线SLD={baseline_sum:.1f}mm，当前SLD={current_sum:.1f}mm，"
-                f"较基线减少{abs(change_percent):.1f}%（≥30%）。"
-                f"依据 RECIST 1.1 靶病灶部分缓解(PR)标准（SLD较基线↓≥30%），判为 PR。",
+                RecistStatus.PR, reason,
                 baseline_sum, current_sum, change_percent,
                 change_from_nadir_pct, False
             )
 
         # 疾病稳定（既达不到PR缩小不足，也未达PD增大不足，介于两者之间）
+        nadir_line = (
+            f"较 nadir 变化 = {change_from_nadir_pct:+.1f}%（未达 +{cls.PD_PERCENT_THRESHOLD:.0f}% "
+            f"或 绝对变化不足 {cls.PD_ABSOLUTE_THRESHOLD:.0f} mm 的 PD 阈值）\n"
+            if change_from_nadir_pct is not None else ""
+        )
+        reason = (
+            f"{header}\n"
+            f"计算公式：SD ⇒ 未达 PR（SLD 较基线下降 < {abs(cls.PR_THRESHOLD):.0f}%）且未达 PD"
+            f"（较 nadir 增加 < {cls.PD_PERCENT_THRESHOLD:.0f}% 或 绝对值增加 < {cls.PD_ABSOLUTE_THRESHOLD:.0f} mm）\n"
+            f"病灶明细（最长径，单位 mm）：\n{detail_lines}\n"
+            f"SLD_基线 = {baseline_sum:.1f} mm；SLD_最低点(nadir) = {effective_nadir:.1f} mm；SLD_当前 = {current_sum:.1f} mm\n"
+            f"较基线变化 = {change_percent:+.1f}%（未达 −{abs(cls.PR_THRESHOLD):.0f}% 的 PR 阈值）\n"
+            f"{nadir_line}"
+            f"既不满足 PR 也不满足 PD ⇒ 介于两者之间，依据 RECIST 1.1 §6.1 判定为疾病稳定(SD)。"
+        )
         return (
-            RecistStatus.SD,
-            f"[{detail}] 基线SLD={baseline_sum:.1f}mm，当前SLD={current_sum:.1f}mm，"
-            f"较基线变化{change_percent:+.1f}%；"
-            f"既未达PR（↓≥30%），也未达PD（较nadir↑≥20%且绝对↑≥5mm）。"
-            f"依据 RECIST 1.1 靶病灶疾病稳定(SD)标准（介于PR与PD之间），判为 SD。",
+            RecistStatus.SD, reason,
             baseline_sum, current_sum, change_percent,
             change_from_nadir_pct, False
         )
@@ -289,14 +351,18 @@ class RecistEngine:
             return RecistStatus.NE, "无非靶病灶数据", False
 
         statuses = [lesion.get("status", "") for lesion in non_target_lesions]
-        detail = _fmt_ntl(non_target_lesions)
+        detail_lines = _fmt_ntl_lines(non_target_lesions)
+        header = "【非靶病灶评估 · RECIST 1.1 §6.2】"
+        marker_note = "注：非靶病灶 PD 须为'明确(unequivocal)'进展（如胸水少量→大量、淋巴管炎局限→弥漫），轻微增大不构成 PD。"
 
         # 任何明确(unequivocal)进展 → PD
         if NonTargetStatus.PROGRESSED.value in statuses:
             return RecistStatus.PD, (
-                f"[{detail}] 至少一个非靶病灶明确(unequivocal)进展。"
-                f"依据 RECIST 1.1 非靶病灶PD标准(6.2)：明确进展 → PD。"
-                f"注：非靶PD须为'明确'进展，轻微增大不构成PD。"
+                f"{header}\n"
+                f"计算公式：PD ⇒ 任一非靶病灶明确(unequivocal)进展，或出现任何新病灶\n"
+                f"病灶明细（状态）：\n{detail_lines}\n"
+                f"至少一个非靶病灶明确(unequivocal)进展。\n"
+                f"依据 RECIST 1.1 §6.2：非靶病灶明确进展 → 疾病进展(PD)。{marker_note}"
             ), False
 
         # 是否全部消失
@@ -306,28 +372,37 @@ class RecistEngine:
         # CR: 所有非靶病灶消失 + 淋巴结短轴 < 10mm（+ 肿瘤标志物正常）
         if all_disappeared and tumor_marker_normal:
             return RecistStatus.CR, (
-                f"[{detail}] 所有非靶病灶消失"
-                f"（且淋巴结短轴<{cls.LYMPH_NODE_SHORT_AXIS_MAX:.0f}mm，肿瘤标志物正常）。"
-                f"依据 RECIST 1.1 非靶病灶完全缓解(CR)标准(6.2)，判为非靶病灶 CR。"
+                f"{header}\n"
+                f"计算公式：CR ⇒ 所有非靶病灶消失（且淋巴结短轴 < {cls.LYMPH_NODE_SHORT_AXIS_MAX:.0f} mm，肿瘤标志物正常）\n"
+                f"病灶明细（状态）：\n{detail_lines}\n"
+                f"所有非靶病灶消失，肿瘤标志物正常。\n"
+                f"依据 RECIST 1.1 §6.2：非靶病灶完全缓解(CR)。"
             ), False
 
         if all_disappeared and not tumor_marker_normal:
             return RecistStatus.NON_CR_NON_PD, (
-                f"[{detail}] 非靶病灶消失但肿瘤标志物未恢复正常。"
-                f"依据 RECIST 1.1 非靶病灶标准(6.2)，判为 Non-CR/Non-PD(IR/SD)。"
+                f"{header}\n"
+                f"计算公式：Non-CR/Non-PD ⇒ 非靶病灶消失但肿瘤标志物未恢复正常\n"
+                f"病灶明细（状态）：\n{detail_lines}\n"
+                f"非靶病灶消失但肿瘤标志物持续高于正常。\n"
+                f"依据 RECIST 1.1 §6.2：判为 Non-CR/Non-PD（IR/SD）。"
             ), False
 
         if any_persistent:
             return RecistStatus.NON_CR_NON_PD, (
-                f"[{detail}] 存在≥1个非靶病灶持续存在，无明确(unequivocal)进展。"
-                f"依据 RECIST 1.1 非靶病灶标准(6.2)：持续存在但非明确进展 → Non-CR/Non-PD(IR/SD)。"
-                f"注：非靶病灶轻微增大不构成PD，必须是明确进展。"
+                f"{header}\n"
+                f"计算公式：Non-CR/Non-PD ⇒ 存在 ≥1 个非靶病灶持续存在且未见明确(unequivocal)进展；或肿瘤标志物持续高于正常\n"
+                f"病灶明细（状态）：\n{detail_lines}\n"
+                f"存在 ≥1 个非靶病灶持续存在，无明确(unequivocal)进展。\n"
+                f"依据 RECIST 1.1 §6.2：持续存在但非明确进展 → Non-CR/Non-PD（IR/SD）。{marker_note}"
             ), False
 
         # 混合/其他情况：保守判为 Non-CR/Non-PD (IR/SD)
         return RecistStatus.NON_CR_NON_PD, (
-            f"[{detail}] 非靶病灶未完全消失且无明确进展，存在非靶病灶或标志物异常。"
-            f"依据 RECIST 1.1 非靶病灶标准(6.2)，判为 Non-CR/Non-PD(IR/SD)。"
+            f"{header}\n"
+            f"病灶明细（状态）：\n{detail_lines}\n"
+            f"非靶病灶未完全消失且无明确进展，存在非靶病灶或标志物异常。\n"
+            f"依据 RECIST 1.1 §6.2：判为 Non-CR/Non-PD（IR/SD）。"
         ), False
 
     @classmethod
@@ -337,7 +412,8 @@ class RecistEngine:
         non_target_status: str,
         has_new_lesion: bool,
         target_not_applicable: bool = False,
-        non_target_not_applicable: bool = False
+        non_target_not_applicable: bool = False,
+        confirmation: Optional[Dict[str, Any]] = None
     ) -> Tuple[str, str]:
         """
         整体疗效评价（RECIST 1.1 决策矩阵）
@@ -347,6 +423,9 @@ class RecistEngine:
 
         not_applicable 表示受试者基线无此类病灶（如无靶病灶），该维度不参与整体评估。
         与 NE（无法评估，存在但数据不足）区分。
+
+        confirmation: 可选，由 build_confirmation() 计算得到的确认上下文（CR/PR 适用），
+                       用于按 RECIST 1.1 §6.3 追加确认规则说明。
 
         Returns:
             (status, reason)
@@ -358,100 +437,198 @@ class RecistEngine:
             """兼容 enum 与 str 输入：返回底层状态值用于文案展示。"""
             return s.value if isinstance(s, RecistStatus) else s
 
+        header = "【总体疗效评估 · RECIST 1.1 决策矩阵】"
+        decided_status: Any = RecistStatus.NE
+        decided_reason = ""
+
         # === Rule 1: 任何新病灶 → PD（最高优先级）===
         if has_new_lesion:
-            return RecistStatus.PD, (
-                f"依据 RECIST 1.1 整体疗效评价决策矩阵（新病灶一票否决，最高优先级）："
-                f"检出新病灶（靶病灶: {_v(tl)}，非靶病灶: {_v(ntl)}），整体疗效直接判为疾病进展(PD)。"
+            decided_status = RecistStatus.PD
+            decided_reason = (
+                f"{header}\n"
+                f"综合输入：靶病灶={_v(tl)}，非靶病灶={_v(ntl)}，新病灶=有。\n"
+                f"决策规则（最高优先级）：任何新病灶出现 → 疾病进展(PD)（一票否决，覆盖其他一切）。\n"
+                f"依据 RECIST 1.1 决策矩阵：检出新病灶，整体疗效直接判为 PD。"
             )
-
         # === Rule 2: 靶病灶 PD → PD ===
-        if tl == RecistStatus.PD and not target_not_applicable:
-            return RecistStatus.PD, (
-                f"依据 RECIST 1.1 整体决策矩阵（靶病灶 PD → 整体 PD）："
-                f"靶病灶判为 PD（非靶病灶: {_v(ntl)}，无新病灶），整体疗效 → PD。"
+        elif tl == RecistStatus.PD and not target_not_applicable:
+            decided_status = RecistStatus.PD
+            decided_reason = (
+                f"{header}\n"
+                f"综合输入：靶病灶=PD，非靶病灶={_v(ntl)}，新病灶=无。\n"
+                f"决策规则：靶病灶 PD → 整体 PD。\n"
+                f"依据 RECIST 1.1 决策矩阵：靶病灶判为 PD，整体疗效 → PD。"
             )
-
         # === Rule 3: 非靶病灶明确进展 → PD ===
-        if ntl == RecistStatus.PD and not non_target_not_applicable:
-            return RecistStatus.PD, (
-                f"依据 RECIST 1.1 整体决策矩阵（非靶病灶明确进展 → 整体 PD）："
-                f"非靶病灶明确进展（靶病灶: {_v(tl)}，无新病灶），整体疗效 → PD。"
+        elif ntl == RecistStatus.PD and not non_target_not_applicable:
+            decided_status = RecistStatus.PD
+            decided_reason = (
+                f"{header}\n"
+                f"综合输入：靶病灶={_v(tl)}，非靶病灶=PD，新病灶=无。\n"
+                f"决策规则：非靶病灶明确(unequivocal)进展 → 整体 PD。\n"
+                f"依据 RECIST 1.1 决策矩阵：非靶病灶明确进展，整体疗效 → PD。"
             )
-
-        # === 处理 not_applicable 情况 ===
-
         # 双方都 not_applicable（既无靶病灶也无非靶病灶）
-        if target_not_applicable and non_target_not_applicable:
-            return RecistStatus.NE, "受试者基线既无靶病灶也无非靶病灶，无可评估病灶 → NE。"
-
+        elif target_not_applicable and non_target_not_applicable:
+            decided_status = RecistStatus.NE
+            decided_reason = f"{header}\n受试者基线既无靶病灶也无非靶病灶，无可评估病灶 → NE。"
         # 无靶病灶：整体跟随非靶病灶
-        if target_not_applicable:
+        elif target_not_applicable:
             if ntl == RecistStatus.CR:
-                return RecistStatus.CR, "受试者无靶病灶，非靶病灶全部消失 → CR。"
+                decided_status = RecistStatus.CR
+                decided_reason = f"{header}\n综合输入：靶病灶=不适用(NA)，非靶病灶=CR，新病灶=无。\n决策规则：无靶病灶 + 非靶病灶 CR → CR。\n受试者无靶病灶，非靶病灶全部消失 → 整体 CR。"
             elif ntl == RecistStatus.NON_CR_NON_PD:
-                return RecistStatus.NON_CR_NON_PD, "受试者无靶病灶，非靶病灶持续存在但无进展 → Non-CR/Non-PD。"
+                decided_status = RecistStatus.NON_CR_NON_PD
+                decided_reason = f"{header}\n综合输入：靶病灶=不适用(NA)，非靶病灶=Non-CR/Non-PD，新病灶=无。\n受试者无靶病灶，非靶病灶持续存在但无进展 → 整体 Non-CR/Non-PD。"
             elif ntl == RecistStatus.PD:
-                return RecistStatus.PD, "受试者无靶病灶，非靶病灶明确进展 → PD。"
+                decided_status = RecistStatus.PD
+                decided_reason = f"{header}\n综合输入：靶病灶=不适用(NA)，非靶病灶=PD，新病灶=无。\n受试者无靶病灶，非靶病灶明确进展 → 整体 PD。"
             else:
-                return RecistStatus.NE, "受试者无靶病灶，非靶病灶亦不可评估 → NE。"
-
+                decided_status = RecistStatus.NE
+                decided_reason = f"{header}\n受试者无靶病灶，非靶病灶亦不可评估 → NE。"
         # 无非靶病灶：整体跟随靶病灶
-        if non_target_not_applicable:
+        elif non_target_not_applicable:
             reason_map = {
-                "CR": "受试者无非靶病灶，靶病灶全部消失 → CR。",
-                "PR": "受试者无非靶病灶，靶病灶充分缩小 → PR。",
-                "SD": "受试者无非靶病灶，靶病灶变化未达PR或PD → SD。",
-                "PD": "受试者无非靶病灶，靶病灶进展 → PD。",
+                "CR": "受试者无非靶病灶，靶病灶全部消失 → 整体 CR。",
+                "PR": "受试者无非靶病灶，靶病灶充分缩小 → 整体 PR。",
+                "SD": "受试者无非靶病灶，靶病灶变化未达PR或PD → 整体 SD。",
+                "PD": "受试者无非靶病灶，靶病灶进展 → 整体 PD。",
             }
+            decided_status = tl if tl in reason_map else RecistStatus.NE
             if tl in reason_map:
-                return tl, reason_map[tl]
-            return RecistStatus.NE, "受试者无非靶病灶，靶病灶亦不可评估 → NE。"
-
-        # === 标准决策矩阵（双方都参与评估）===
-
+                decided_reason = f"{header}\n综合输入：靶病灶={_v(tl)}，非靶病灶=不适用(NA)，新病灶=无。\n决策规则：无非靶病灶 + 靶病灶 {_v(tl)} → {_v(tl)}。\n{reason_map[tl]}"
+            else:
+                decided_reason = f"{header}\n受试者无非靶病灶，靶病灶亦不可评估 → NE。"
         # 双方都不可评估
-        if tl == RecistStatus.NE and ntl == RecistStatus.NE:
-            return RecistStatus.NE, "靶病灶和非靶病灶均不可评估 → NE。"
-
+        elif tl == RecistStatus.NE and ntl == RecistStatus.NE:
+            decided_status = RecistStatus.NE
+            decided_reason = f"{header}\n靶病灶和非靶病灶均不可评估 → NE。"
         # 靶病灶不可评估 + 非靶病灶可评估
-        if tl == RecistStatus.NE:
+        elif tl == RecistStatus.NE:
             if ntl == RecistStatus.CR:
-                return RecistStatus.NE, "非靶病灶CR但靶病灶不可评估，无法确认是否为完全缓解 → NE。"
+                decided_status = RecistStatus.NE
+                decided_reason = f"{header}\n综合输入：靶病灶=NE，非靶病灶=CR，新病灶=无。\n非靶病灶 CR 但靶病灶不可评估，无法确认是否为完全缓解 → NE。"
             elif ntl == RecistStatus.NON_CR_NON_PD:
-                return RecistStatus.NON_CR_NON_PD, "靶病灶不可评估但非靶病灶持续存在 → Non-CR/Non-PD。"
+                decided_status = RecistStatus.NON_CR_NON_PD
+                decided_reason = f"{header}\n综合输入：靶病灶=NE，非靶病灶=Non-CR/Non-PD，新病灶=无。\n靶病灶不可评估但非靶病灶持续存在 → 整体 Non-CR/Non-PD。"
             else:
-                return RecistStatus.NE, "靶病灶不可评估，无法确定整体疗效 → NE。"
-
+                decided_status = RecistStatus.NE
+                decided_reason = f"{header}\n靶病灶不可评估，无法确定整体疗效 → NE。"
         # 非靶病灶不可评估 + 靶病灶可评估
-        if ntl == RecistStatus.NE:
+        elif ntl == RecistStatus.NE:
             if tl == RecistStatus.CR:
-                return RecistStatus.PR, "靶病灶CR但非靶病灶不可评估，不能判为CR → PR。"
+                decided_status = RecistStatus.PR
+                decided_reason = f"{header}\n综合输入：靶病灶=CR，非靶病灶=NE，新病灶=无。\n决策规则：靶病灶 CR 但非靶病灶不可评估，不能判为 CR → 整体 PR（最佳缓解）。"
             elif tl == RecistStatus.PR:
-                return RecistStatus.PR, "靶病灶PR（非靶病灶不可评估），靶病灶PR仍成立 → PR。"
+                decided_status = RecistStatus.PR
+                decided_reason = f"{header}\n综合输入：靶病灶=PR，非靶病灶=NE，新病灶=无。\n决策规则：靶病灶 PR（非靶病灶不可评估）→ 整体 PR。"
             elif tl == RecistStatus.SD:
-                return RecistStatus.SD, "靶病灶SD（非靶病灶不可评估），保守判断为SD。"
+                decided_status = RecistStatus.SD
+                decided_reason = f"{header}\n综合输入：靶病灶=SD，非靶病灶=NE，新病灶=无。\n决策规则：靶病灶 SD（非靶病灶不可评估）→ 整体 SD。"
             else:
-                return RecistStatus.NE, "非靶病灶不可评估，无法确定整体疗效 → NE。"
-
+                decided_status = RecistStatus.NE
+                decided_reason = f"{header}\n非靶病灶不可评估，无法确定整体疗效 → NE。"
         # CR + CR → CR
-        if tl == RecistStatus.CR and ntl == RecistStatus.CR:
-            return RecistStatus.CR, "依据 RECIST 1.1 整体决策矩阵（CR+CR→CR）：靶病灶CR + 非靶病灶CR + 无新病灶 → 所有病灶消失 → 整体 CR。"
-
+        elif tl == RecistStatus.CR and ntl == RecistStatus.CR:
+            decided_status = RecistStatus.CR
+            decided_reason = f"{header}\n综合输入：靶病灶=CR，非靶病灶=CR，新病灶=无。\n决策规则：CR + CR → CR。\n依据决策矩阵：所有病灶消失 → 整体 CR。"
         # CR + Non-CR/Non-PD → PR
-        if tl == RecistStatus.CR and ntl == RecistStatus.NON_CR_NON_PD:
-            return RecistStatus.PR, "依据 RECIST 1.1 整体决策矩阵（CR+Non-CR/Non-PD→PR）：靶病灶CR但非靶病灶持续存在（Non-CR/Non-PD），不能判为CR → 整体 PR。"
-
+        elif tl == RecistStatus.CR and ntl == RecistStatus.NON_CR_NON_PD:
+            decided_status = RecistStatus.PR
+            decided_reason = f"{header}\n综合输入：靶病灶=CR，非靶病灶=Non-CR/Non-PD，新病灶=无。\n决策规则：CR + Non-CR/Non-PD → PR。\n靶病灶 CR 但非靶病灶持续存在，不能判为 CR → 整体 PR。"
         # PR + (CR 或 Non-CR/Non-PD) → PR
-        if tl == RecistStatus.PR and ntl in (RecistStatus.CR, RecistStatus.NON_CR_NON_PD):
-            return RecistStatus.PR, f"依据 RECIST 1.1 整体决策矩阵（PR+(CR/Non-CR/Non-PD)→PR）：靶病灶PR（非靶病灶: {_v(ntl)}），靶病灶负荷充分缩小 → 整体 PR。"
-
+        elif tl == RecistStatus.PR and ntl in (RecistStatus.CR, RecistStatus.NON_CR_NON_PD):
+            decided_status = RecistStatus.PR
+            decided_reason = f"{header}\n综合输入：靶病灶=PR，非靶病灶={_v(ntl)}，新病灶=无。\n决策规则：PR + (CR/Non-CR/Non-PD) → PR。\n靶病灶负荷充分缩小 → 整体 PR。"
         # SD + (CR 或 Non-CR/Non-PD) → SD
-        if tl == RecistStatus.SD and ntl in (RecistStatus.CR, RecistStatus.NON_CR_NON_PD):
-            return RecistStatus.SD, f"依据 RECIST 1.1 整体决策矩阵（SD+(CR/Non-CR/Non-PD)→SD）：靶病灶SD（非靶病灶: {_v(ntl)}），未达到PR或PD标准 → 整体 SD。"
-
+        elif tl == RecistStatus.SD and ntl in (RecistStatus.CR, RecistStatus.NON_CR_NON_PD):
+            decided_status = RecistStatus.SD
+            decided_reason = f"{header}\n综合输入：靶病灶=SD，非靶病灶={_v(ntl)}，新病灶=无。\n决策规则：SD + (CR/Non-CR/Non-PD) → SD。\n未达到 PR 或 PD 标准 → 整体 SD。"
         # 兜底
-        return RecistStatus.NE, f"无法确定整体评价：靶病灶={tl}，非靶病灶={ntl}。"
+        else:
+            decided_status = RecistStatus.NE
+            decided_reason = f"{header}\n无法确定整体评价：靶病灶={tl}，非靶病灶={ntl}。"
+
+        # === 追加确认规则说明（RECIST 1.1 §6.3，仅 CR/PR 适用）===
+        if decided_status in (RecistStatus.CR, RecistStatus.PR) and confirmation:
+            decided_reason = decided_reason + cls.confirmation_note(_v(decided_status), confirmation)
+
+        return decided_status, decided_reason
+
+    @staticmethod
+    def confirmation_note(status: str, confirmation: Optional[Dict[str, Any]]) -> str:
+        """依据确认上下文生成 RECIST 1.1 §6.3 确认规则说明（追加到 overall_reason 末尾）。"""
+        if not confirmation or not confirmation.get("applies"):
+            return ""
+        kind = status  # "CR" or "PR"
+        confirmed = confirmation.get("confirmed")
+        visit = confirmation.get("confirming_visit") or ""
+        if confirmed is True:
+            return (
+                f"\n【确认规则 · RECIST 1.1 §6.3】{kind} 须在治疗后 ≥4 周复查确认（非随机试验）。"
+                f"本 {kind} 已于后续 ≥4 周访视（{visit}）复查仍为 {kind}/SD/CR，确认成立 → 持续{kind}。"
+            )
+        if confirmed is False:
+            return (
+                f"\n【确认规则 · RECIST 1.1 §6.3】{kind} 须在治疗后 ≥4 周复查确认（非随机试验）。"
+                f"本 {kind} 在后续 ≥4 周访视（{visit}）出现疾病进展，故该 {kind} 为未确认(unconfirmed)最佳缓解；"
+                f"按 RECIST 记录最佳总体疗效仍为 {kind}，但标注未确认。"
+            )
+        return (
+            f"\n【确认规则 · RECIST 1.1 §6.3】{kind} 须在治疗后 ≥4 周复查确认（非随机试验）。"
+            f"当前为首次/未确认判定，待后续 ≥4 周访视确认；若届时仍为 {kind}/SD/CR，则确认为 {kind}。"
+        )
+
+    @staticmethod
+    def build_confirmation(
+        subject_assessments: List[Any],
+        current_assessment: Any,
+        overall_status: str
+    ) -> Optional[Dict[str, Any]]:
+        """依据受试者全部评估的时间线，判定 CR/PR 是否需要/已确认（RECIST 1.1 §6.3）。
+
+        Args:
+            subject_assessments: 该受试者所有 Assessment ORM 对象（含当前）
+            current_assessment: 当前正在评估的 Assessment 对象
+            overall_status: 当前计算得到的整体状态（CR/PR/...）
+
+        Returns:
+            dict: {"applies": bool, "status": str, "confirmed": bool|None, "confirming_visit": str|None}
+            非 CR/PR 返回 None。
+        """
+        if overall_status not in (RecistStatus.CR.value, RecistStatus.PR.value):
+            return None
+        if not subject_assessments:
+            return {"applies": True, "status": overall_status, "confirmed": None, "confirming_visit": None}
+
+        cur_date = current_assessment.assessment_date
+        sentinel = datetime(1, 1, 1, tzinfo=timezone.utc)
+
+        def _key(a):
+            return (a.assessment_date or sentinel, a.cycle_number or 0)
+
+        # 后续访视：日期严格更晚，或日期缺失时周期更大
+        future = [
+            a for a in subject_assessments
+            if a.id != current_assessment.id and _key(a) > _key(current_assessment)
+        ]
+
+        confirming = None
+        for a in sorted(future, key=_key):
+            if a.assessment_date and cur_date:
+                delta = (a.assessment_date - cur_date).days
+                if delta >= 28:
+                    confirming = a
+                    break
+        if confirming is None:
+            return {"applies": True, "status": overall_status, "confirmed": None, "confirming_visit": None}
+
+        visit = confirming.visit_name or f"周期{confirming.cycle_number}"
+        if confirming.overall_status in (RecistStatus.CR.value, RecistStatus.PR.value, RecistStatus.SD.value):
+            return {"applies": True, "status": overall_status, "confirmed": True, "confirming_visit": visit}
+        if confirming.overall_status == RecistStatus.PD.value:
+            return {"applies": True, "status": overall_status, "confirmed": False, "confirming_visit": visit}
+        return {"applies": True, "status": overall_status, "confirmed": None, "confirming_visit": visit}
 
     @classmethod
     def assess_comprehensive(
@@ -532,7 +709,8 @@ class RecistEngine:
         tumor_marker_normal: bool = True,
         nadir_sum: Optional[float] = None,
         target_not_applicable: bool = False,
-        non_target_not_applicable: bool = False
+        non_target_not_applicable: bool = False,
+        confirmation: Optional[Dict[str, Any]] = None
     ) -> AssessmentResult:
         """
         执行完整 RECIST 1.1 评估
@@ -555,7 +733,8 @@ class RecistEngine:
         overall_status, overall_reason = cls.assess_overall(
             target_status, non_target_status, has_new_lesion,
             target_not_applicable or tl_na,
-            non_target_not_applicable or ntl_na
+            non_target_not_applicable or ntl_na,
+            confirmation=confirmation
         )
 
         return AssessmentResult(

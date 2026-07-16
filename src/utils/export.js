@@ -251,10 +251,12 @@ export function exportAssessmentsToPDF(title, rows, subtitle = '') {
 
 /**
  * 导出受试者概览到 PDF
+ * @param {Object[]} subjectRows 按受试者分组的行
+ * @param {string} [title] 报告标题（同时作为浏览器"另存为 PDF"的默认文件名），默认"受试者概览"
  */
-export function exportSubjectsToPDF(subjectRows, subtitle = '') {
+export function exportSubjectsToPDF(subjectRows, title = '受试者概览') {
   const data = flattenSubjectRows(subjectRows)
-  exportToPDF('受试者概览', data, subtitle)
+  exportToPDF(title, data, '')
 }
 
 // HTML 转义
@@ -265,4 +267,80 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
+}
+
+/**
+ * 将任意 HTML 内容导出为 Word(.doc) 文档。
+ * 优先弹出原生保存对话框让用户选择位置，取消则返回 'cancelled'，不支持/失败则回退默认下载。
+ * @param {string} title   文档标题（同时作为文件名，不含扩展名）
+ * @param {string} bodyHtml 已渲染的 HTML 正文（不含外层 body）
+ * @returns {Promise<'picker'|'download'|'cancelled'>}
+ */
+export async function exportHtmlToDoc(title, bodyHtml) {
+  const dateStr = new Date().toLocaleString('zh-CN')
+  const html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/1999/xhtml'>
+<head>
+<meta charset='utf-8'>
+<title>${escapeHtml(title)}</title>
+<style>
+  body { font-family: "Microsoft YaHei", "SimSun", sans-serif; color: #1f2937; font-size: 13px; line-height: 1.7; margin: 0; padding: 0 24px; }
+  h2 { font-size: 17px; font-weight: 700; color: #1e6bd6; margin: 22px 0 10px; padding-bottom: 6px; border-bottom: 2px solid #1e6bd6; }
+  h3 { font-size: 14px; font-weight: 600; color: #1f2937; margin: 16px 0 8px; }
+  h4 { font-size: 13px; font-weight: 600; color: #374151; margin: 12px 0 6px; }
+  p { margin: 8px 0; }
+  ul, ol { padding-left: 22px; margin: 8px 0; }
+  li { margin: 4px 0; }
+  code { background: #f3f4f6; padding: 1px 5px; border-radius: 3px; font-family: Consolas, "Courier New", monospace; font-size: 12px; color: #d63384; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 12px; }
+  th { background: #1e6bd6; color: #fff; padding: 7px 8px; border: 1px solid #cfd8e3; text-align: left; }
+  td { padding: 6px 8px; border: 1px solid #e5e7eb; vertical-align: top; }
+  .formula-box { background: #0f172a; color: #e2e8f0; padding: 12px 16px; border-radius: 6px; margin: 10px 0; font-family: Consolas, "Courier New", monospace; font-size: 12px; line-height: 1.9; }
+  .formula-box code { color: #e2e8f0; background: transparent; padding: 0; }
+  .help-callout { background: #e8f0fe; border-left: 4px solid #1e6bd6; padding: 10px 14px; border-radius: 4px; margin: 10px 0; }
+</style>
+</head>
+<body>
+  <div style="text-align:center; margin: 16px 0 20px;">
+    <h1 style="color:#1e6bd6; font-size:22px; font-weight:700; margin:0;">${escapeHtml(title)}</h1>
+    <p style="color:#909399; font-size:12px; margin:4px 0 0;">RECIST 病灶评估系统 · 使用帮助　|　导出时间：${dateStr}</p>
+  </div>
+  ${bodyHtml}
+  <div style="margin-top:20px; font-size:11px; color:#c0c4cc; text-align:center; border-top:1px solid #e5e7eb; padding-top:10px;">本文档由 RECIST 病灶评估系统自动生成</div>
+</body>
+</html>`
+
+  // 加 BOM 以确保 Word 正确识别 UTF-8 中文
+  const blob = new Blob(['﻿' + html], { type: 'application/msword' })
+  const safeName = `${(title || 'document').replace(/[\\/:*?"<>|]/g, '_')}.doc`
+
+  // 现代浏览器：弹出原生保存对话框，可选位置与文件名
+  if (typeof window !== 'undefined' && window.showSaveFilePicker) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: safeName,
+        types: [{
+          description: 'Word 文档',
+          accept: { 'application/msword': ['.doc'] }
+        }]
+      })
+      const writable = await handle.createWritable()
+      await writable.write(blob)
+      await writable.close()
+      return 'picker'
+    } catch (e) {
+      if (e && e.name === 'AbortError') return 'cancelled' // 用户取消
+      console.warn('showSaveFilePicker failed, fallback to download', e)
+    }
+  }
+
+  // 回退：浏览器默认下载到"下载"目录
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = safeName
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+  return 'download'
 }
