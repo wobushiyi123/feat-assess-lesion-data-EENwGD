@@ -314,7 +314,7 @@
       <!-- ===== 弹窗：一键下发质疑（程序/人工不一致数据） ===== -->
       <el-dialog v-model="showQueryDialog" title="数据质疑清单 (Data Query)" width="1100px" top="5vh">
         <div class="query-tip">
-          以下为各受试者最新一次评估中<strong>系统计算与人工录入不一致</strong>的记录。可点击右下角「下载」导出 Excel 并选择保存位置。
+          以下为各受试者最新一次评估中<strong>总体疗效（程序）与总体疗效（人工）不一致</strong>的记录。可点击右下角「下载」导出 Excel 并选择保存位置。
         </div>
         <el-table :data="queryRows" border stripe size="small" max-height="46vh" empty-text="暂无不一致数据，无需质疑" :row-class-name="() => 'query-row'">
           <el-table-column prop="subject_id" label="受试者编号" width="120" align="center" />
@@ -743,9 +743,9 @@ const queryRows = computed(() => {
       map.set(r.subject_db_id, r)
     }
   })
-  // 只保留有人工数据且（整体/靶/非靶任一）不一致的行
+  // 只保留有人工数据且「总体疗效(程序) vs 总体疗效(人工)」不一致的行
   return Array.from(map.values())
-    .filter(r => r.has_manual_data && (r.overall_match === false || r.target_match === false || r.non_target_match === false))
+    .filter(r => r.has_manual_data && r.overall_match === false)
     .map(r => ({
       subject_id: r.subject_id,
       visit: r.cycle_number ? `周期${r.cycle_number}` : (r.assessment_date ? String(r.assessment_date).split('T')[0] : '-'),

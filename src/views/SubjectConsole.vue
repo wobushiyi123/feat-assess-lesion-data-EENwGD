@@ -217,7 +217,7 @@
                   一键下发质疑
                 </el-button>
                 <span class="query-tip">
-                  {{ hasMismatch ? `存在 ${verifyRows.filter(r => r.hasMan && !r.match).length} 项不一致，点击导出 Excel` : '系统计算与人工录入一致，无需质疑' }}
+                  {{ hasMismatch ? `当前周期存在 ${verifyRows.filter(r => r.hasMan && !r.match).length} 项不一致，点击导出所有周期的完整不一致信息到 Excel` : '系统计算与人工录入一致，无需质疑' }}
                 </span>
               </div>
             </section>
@@ -467,32 +467,55 @@ const verifyRows = computed(() => {
 })
 const hasMismatch = computed(() => verifyRows.value.some(r => r.hasMan && !r.match))
 
-// 一键下发疑问：将程序/人工不一致的数据导出为 Excel，询问保存位置
+// 一键下发质疑：导出该受试者「所有周期」中程序/人工不一致的完整详细信息（含自身基本信息+对比详情）
 const sendQuery = async () => {
-  const mismatched = verifyRows.value.filter(r => r.hasMan && !r.match)
-  if (!mismatched.length) {
-    ElMessage.info('当前评估无不一致项，无需下发质疑')
+  // 先收集该受试者所有周期的不一致项
+  const allMismatched = []
+  for (const a of sortedAssessments.value) {
+    const rows = buildVerifyRows(a).filter(r => r.hasMan && !r.match)
+    for (const r of rows) {
+      allMismatched.push({
+        '受试者编号': subject.value?.subject_id || '-',
+        '访视/周期': a.cycle_number ? `周期${a.cycle_number}` : (a.assessment_date ? String(a.assessment_date).split('T')[0] : '-'),
+        '检查日期': a.assessment_date ? String(a.assessment_date).split('T')[0] : '-',
+        '评价维度': r.label,
+        '系统计算(规则引擎)': r.sysText,
+        '人工填写(EDC)': r.manText,
+        '一致性': '✗ 不一致'
+      })
+    }
+  }
+  if (!allMismatched.length) {
+    ElMessage.info('该受试者所有周期均无程序/人工不一致项，无需下发质疑')
     return
   }
   try {
-    const a = selectedAssessment.value
-    const data = mismatched.map(r => ({
-      '受试者编号': subject.value?.subject_id || '-',
-      '访视/周期': a?.cycle_number ? `周期${a.cycle_number}` : (a?.assessment_date ? String(a.assessment_date).split('T')[0] : '-'),
-      '评价维度': r.label,
-      '系统计算(规则引擎)': r.sysText,
-      '人工填写(EDC)': r.manText,
-      '一致性': r.match ? '✓ 一致' : '✗ 不一致'
-    }))
-    const fn = `数据质疑_${subject.value?.subject_id || 'unknown'}_周期${a?.cycle_number || ''}_${new Date().toISOString().split('T')[0]}.xlsx`
-    const res = await exportToExcelWithPicker(data, fn, '数据质疑')
+    const fn = `数据质疑_${subject.value?.subject_id || 'unknown'}_全周期_${new Date().toISOString().split('T')[0]}.xlsx`
+    const res = await exportToExcelWithPicker(allMismatched, fn, '数据质疑')
     if (res === 'cancelled') ElMessage.info('已取消导出')
     else if (res === 'empty') ElMessage.warning('暂无可导出的质疑数据')
-    else ElMessage.success(`已导出 ${mismatched.length} 条不一致记录到 Excel（已选择保存位置）`)
+    else ElMessage.success(`已导出 ${allMismatched.length} 条不一致记录到 Excel（含所有周期，已选择保存位置）`)
   } catch (e) {
     console.error(e)
     ElMessage.error('导出失败：' + e.message)
   }
+}
+
+// 构建单个评估的稽查对比行（复用 verifyRows 逻辑，但接受任意 assessment 参数）
+const buildVerifyRows = (a) => {
+  if (!a) return []
+  const build = (label, sysVal, manVal, sysIsNew) => {
+    const sysText = sysIsNew ? (sysVal ? '有' : '无') : shortStatus(sysVal)
+    const manText = sysIsNew ? (manVal ? '有' : '无') : shortStatus(manVal)
+    const hasMan = manVal !== null && manVal !== undefined && manVal !== ''
+    return { label, sysText, manText, hasMan, match: hasMan ? sysText === manText : null }
+  }
+  return [
+    build('靶病灶评估', a.target_status, a.manual_target_status, false),
+    build('非靶病灶评估', a.non_target_status, a.manual_non_target_status, false),
+    build('新病灶', a.has_new_lesion, a.manual_has_new_lesion, true),
+    build('整体评价', a.overall_status, a.manual_overall_status, false)
+  ]
 }
 
 // ===== 折线图 =====
