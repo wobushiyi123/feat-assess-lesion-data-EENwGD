@@ -86,7 +86,7 @@
           <div class="edit-toolbar-left">
             <label class="edit-label">检查时间点</label>
             <el-select v-model="subjectEdit.assessmentId" placeholder="选择检查时间点" style="width:260px">
-              <el-option v-for="(a, i) in subjectEdit.assessments" :key="a.id" :label="a.visit_name || (`周期${i + 1} · ${formatDate(a.assessment_date)}`)" :value="a.id" />
+              <el-option v-for="(a, i) in subjectEdit.assessments" :key="a.id" :label="a.visit_name || (`周期${a.cycle_number || (i + 1)} · ${formatDate(a.assessment_date)}`)" :value="a.id" />
             </el-select>
           </div>
           <span class="edit-tip">选择检查时间点后，下方为该点对应的靶病灶 / 非靶病灶 / 新病灶，可逐条编辑或删除</span>
@@ -159,7 +159,7 @@
       @saved="onLesionSaved"
     />
 
-    <!-- 新增病灶（新建检查时间点）弹窗 -->
+    <!-- 新增病灶（新增评估）弹窗 -->
     <AddCheckpointDialog
       v-model="addLesion.visible"
       :subject-id="addLesion.subjectId"
@@ -366,7 +366,7 @@ const openSubjectEdit = async (row) => {
   try {
     const detail = await subjectApi.get(row.id, { batch_id: state.currentBatchId })
     const list = (detail.assessments || []).slice().sort(
-      (a, b) => new Date(a.assessment_date) - new Date(b.assessment_date)
+      (a, b) => (a.cycle_number || 0) - (b.cycle_number || 0) || (new Date(a.assessment_date) - new Date(b.assessment_date))
     )
     subjectEdit.assessments = list
     // 默认选中最新（日期最大）的评估时间点
@@ -425,7 +425,7 @@ const onLesionSaved = async () => {
   try {
     const detail = await subjectApi.get(subjectEdit.subjectId, { batch_id: state.currentBatchId })
     const list = (detail.assessments || []).slice().sort(
-      (a, b) => new Date(a.assessment_date) - new Date(b.assessment_date)
+      (a, b) => (a.cycle_number || 0) - (b.cycle_number || 0) || (new Date(a.assessment_date) - new Date(b.assessment_date))
     )
     subjectEdit.assessments = list
     if (!subjectEdit.assessments.some(a => a.id === subjectEdit.assessmentId)) {
@@ -449,7 +449,7 @@ const refreshSubjectEdit = async (subjectId) => {
   try {
     const detail = await subjectApi.get(subjectId, { batch_id: state.currentBatchId })
     const list = (detail.assessments || []).slice().sort(
-      (a, b) => new Date(a.assessment_date) - new Date(b.assessment_date)
+      (a, b) => (a.cycle_number || 0) - (b.cycle_number || 0) || (new Date(a.assessment_date) - new Date(b.assessment_date))
     )
     subjectEdit.assessments = list
     // 若当前选中的时间点已不存在，切到最新

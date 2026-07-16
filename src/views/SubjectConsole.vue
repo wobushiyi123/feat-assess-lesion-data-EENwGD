@@ -103,6 +103,7 @@
                     <span :class="ntlStatusClass(s.row.status)">{{ s.row.status || '-' }}</span>
                   </template>
                 </el-table-column>
+                <el-table-column prop="current_exam_date" label="当前检查日期" width="140" align="center" />
               </el-table>
             </section>
 
@@ -262,6 +263,12 @@ const loadSubject = async () => {
     loading.value = false
     return
   }
+  // 销毁旧图表实例（keep-alive 缓存时 onUnmounted 不触发，导致 chartInstance 指向已脱离 DOM 的节点；
+  // loading=true 会通过 v-if 移除图表容器 DOM，必须先 dispose 否则重入时 setOption 失效）
+  if (chartInstance) {
+    chartInstance.dispose()
+    chartInstance = null
+  }
   loading.value = true
   try {
     subject.value = await subjectApi.get(route.params.id)
@@ -326,11 +333,11 @@ const onLesionEditSaved = async () => {
   await loadSubject()
 }
 
-// 时间轴节点标签：优先使用 EDC 原始访视名称（如"肿瘤疗效评估（RECIST1.1）#2（第8周±7天）"），
-// 没有则 fallback 到"周期N"
+// 时间轴节点标签：优先使用"周期N"，无 cycle_number 则 fallback 到检查日期（YYYY-MM-DD）
 const nodeLabel = (assessment, idx) => {
-  const name = assessment?.visit_name
-  if (name && typeof name === 'string' && name.trim()) return name.trim()
+  if (assessment?.cycle_number) return `周期${assessment.cycle_number}`
+  const d = assessment?.assessment_date
+  if (d) return String(d).split('T')[0]
   return `周期${idx + 1}`
 }
 
@@ -353,7 +360,8 @@ const mapNonTargetLesion = (t) => ({
   organ: t.organ || '',
   isLymphNode: !!t.is_lymph_node,
   baseline_status: t.baseline_status ?? '持续存在',
-  status: t.status || '持续存在'
+  status: t.status || '持续存在',
+  current_exam_date: t.current_exam_date || ''
 })
 const mapNewLesion = (t) => ({
   id: t.id,

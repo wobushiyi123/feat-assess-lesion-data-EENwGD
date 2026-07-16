@@ -2,7 +2,7 @@
   <el-dialog
     :model-value="modelValue"
     @update:model-value="(v) => emit('update:modelValue', v)"
-    title="新增病灶（新建检查时间点）"
+    title="新增病灶"
     width="1100px"
     class="add-checkpoint-dialog"
     :close-on-click-modal="false"
@@ -24,8 +24,8 @@
         :closable="false"
         show-icon
         class="cp-tip"
-        title="新建检查时间点"
-        description="请按实际存在的病灶类型打开对应开关；开关为「否」时该类型表单不可编辑也不会保存。保存后将生成一条新的评估记录。"
+        title="新增评估"
+        description="请按实际存在的病灶类型打开对应开关；开关为「否」时该类型表单不可编辑也不会保存。系统按「检查日期」归并：若该日期已存在评估则在其下追加病灶（同一周期），否则生成一条新评估记录。"
       />
 
       <!-- 开关区 -->
@@ -210,6 +210,26 @@
             </el-col>
           </el-row>
           <el-row :gutter="12">
+            <el-col :span="6">
+              <el-form-item label="是否检查(当前)">
+                <el-select v-model="row.current_is_checked" placeholder="" clearable style="width:100%">
+                  <el-option label="是" :value="true" />
+                  <el-option label="否" :value="false" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="6">
+              <el-form-item label="当前检查日期" required>
+                <el-date-picker v-model="row.current_exam_date" type="date" value-format="YYYY-MM-DD" style="width:100%" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="6">
+              <el-form-item label="当前检查方法" required>
+                <el-input v-model="row.current_exam_method" placeholder="如: 增强CT" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="12">
             <el-col :span="12">
               <el-form-item label="备注">
                 <el-input v-model="row.notes" type="textarea" :rows="1" />
@@ -292,7 +312,7 @@
 <script setup>
 import { ref, reactive, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import api, { assessmentApi } from '../api'
+import api, { assessmentApi, subjectApi } from '../api'
 
 const ORGAN_OPTIONS = [
   '淋巴结', '肺', '肝', '骨', '脑', '肾上腺', '腹膜后', '盆腔', '乳腺', '皮下软组织', '其他'
@@ -414,6 +434,8 @@ function validate() {
       if (isBlank(r.exam_method)) { ElMessage.warning(`${tag}：请填写基线检查方法`); return false }
       if (isBlank(r.baseline_status)) { ElMessage.warning(`${tag}：请选择基线状态`); return false }
       if (isBlank(r.status)) { ElMessage.warning(`${tag}：请选择当前状态`); return false }
+      if (isBlank(r.current_exam_date)) { ElMessage.warning(`${tag}：请填写当前检查日期`); return false }
+      if (isBlank(r.current_exam_method)) { ElMessage.warning(`${tag}：请填写当前检查方法`); return false }
     }
   }
   // 新病灶必填
@@ -435,24 +457,50 @@ async function save() {
   if (!validate()) return
   saving.value = true
   try {
-    const payload = {
-      subject_id: props.subjectId,
-      cycle_number: form.cycleNumber,
-      batch_id: props.batchId,
-      has_new_lesion: form.hasNewLesion,
-      tumor_marker_normal: true,
-      target_lesions: form.hasTarget ? form.targets.map(mapTarget) : [],
-      non_target_lesions: form.hasNonTarget ? form.nonTargets.map(mapNonTarget) : []
-    }
-    const res = await assessmentApi.create(payload)
-    const newAssessmentId = res?.id
-    // 新病灶：create_assessment 端点暂未支持 new_lesions，逐条新增
-    if (form.hasNewLesion && newAssessmentId) {
-      for (const r of form.newLesions) {
-        await api.post(`/api/assessments/${newAssessmentId}/new-lesions`, mapNewLesion(r))
+    // 本批次病灶所属「检查时间点」（评估主日期）= 所有病灶当前/检查日期的最大值
+    const dates = []
+    for (const r of form.targets) if (r.current_exam_date) dates.push(r.current_exam_date)
+    for (const r of form.nonTargets) if (r.current_exam_date) dates.push(r.current_exam_date)
+    for (const r of form.newLesions) if (r.exam_date) dates.push(r.exam_date)
+    const assessmentDate = dates.length
+      ? dates.reduce((a, b) => (a > b ? a : b))
+      : new Date().toISOString().slice(0, 10)
+
+    // 查该受试者是否已存在同一检查日期的评估：有则复用（同一周期），避免盲目递增周期
+    const detail = await subjectApi.get(props.subjectId, { batch_id: props.batchId })
+    const existing = (detail.assessments || []).find(
+      (a) => (a.assessment_date || '').slice(0, 10) === assessmentDate
+    )
+
+    if (existing) {
+      // 同一时间点 → 追加病灶，复用该评估的周期，不新建递增周期
+      const aid = existing.id
+      for (const r of form.targets) await api.post(`/api/assessments/${aid}/target-lesions`, mapTarget(r))
+      for (const r of form.nonTargets) await api.post(`/api/assessments/${aid}/non-target-lesions`, mapNonTarget(r))
+      for (const r of form.newLesions) await api.post(`/api/assessments/${aid}/new-lesions`, mapNewLesion(r))
+      ElMessage.success('已在该检查时间点追加病灶')
+    } else {
+      // 新时间点：周期 = 现有最大周期 + 1，并显式写入检查日期
+      const payload = {
+        subject_id: props.subjectId,
+        cycle_number: form.cycleNumber,
+        assessment_date: assessmentDate,
+        batch_id: props.batchId,
+        has_new_lesion: form.hasNewLesion,
+        tumor_marker_normal: true,
+        target_lesions: form.hasTarget ? form.targets.map(mapTarget) : [],
+        non_target_lesions: form.hasNonTarget ? form.nonTargets.map(mapNonTarget) : []
       }
+      const res = await assessmentApi.create(payload)
+      const newAssessmentId = res?.id
+      // 新病灶：create_assessment 端点暂未支持 new_lesions，逐条新增
+      if (form.hasNewLesion && newAssessmentId) {
+        for (const r of form.newLesions) {
+          await api.post(`/api/assessments/${newAssessmentId}/new-lesions`, mapNewLesion(r))
+        }
+      }
+      ElMessage.success('已新增评估并保存病灶')
     }
-    ElMessage.success('已新建检查时间点并保存病灶')
     emit('saved')
     emit('update:modelValue', false)
   } catch (e) {

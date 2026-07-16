@@ -314,7 +314,7 @@
       <!-- ===== 弹窗：一键下发质疑（数据质疑清单） ===== -->
       <el-dialog v-model="showQueryDialog" title="数据质疑清单 (Data Query)" width="1000px" top="5vh">
         <div class="query-tip">
-          以下为各受试者<strong>最新一次评估</strong>的综合信息，供数据质疑（下发）使用。可点击右下角「下载Excel」在弹出的对话框中选择保存位置。
+          以下为各受试者<strong>最新一次评估</strong>的综合信息，供数据质疑（下发）使用。可点击右下角「下载」并选择保存位置。
         </div>
         <el-table :data="queryRows" border stripe size="small" max-height="46vh" empty-text="暂无评估数据">
           <el-table-column prop="subject_id" label="受试者编号" width="120" align="center" />
@@ -339,7 +339,7 @@
         </el-table>
         <template #footer>
           <el-button @click="showQueryDialog = false">关闭</el-button>
-          <el-button type="success" :icon="Download" :loading="queryExporting" @click="exportQueryExcel">下载Excel（选择保存位置）</el-button>
+          <el-button type="success" :icon="Download" :loading="queryExporting" @click="exportQueryExcel">下载</el-button>
         </template>
       </el-dialog>
     </div>
@@ -461,7 +461,12 @@ const renderTrendChart = () => {
   trendChart = echarts.init(trendChartRef.value)
 
   const history = [...trendData.value.historical_data].sort((a, b) => a.cycle_number - b.cycle_number)
-  const xData = history.map(h => h.visit_name || `周期${h.cycle_number}`)
+  const xData = history.map(h => {
+    if (h.cycle_number) return `周期${h.cycle_number}`
+    const d = h.assessment_date || h.date
+    if (d) return String(d).split('T')[0]
+    return `周期${h.cycle_number || '-'}`
+  })
   const statusData = history.map(h => getStatusText(h.overall_status))
   const currentSld = history.map(h => (h.current_sld ?? null))
   const changePct = history.map(h => (h.change_percent ?? 0))
@@ -506,11 +511,15 @@ const renderTrendChart = () => {
     markLine: {
       silent: true,
       data: [
-        { yAxis: 20, lineStyle: { color: '#f56c6c', type: 'dashed' }, label: { formatter: 'PD阈值(+20%)' } },
-        { yAxis: -30, lineStyle: { color: '#67c23a', type: 'dashed' }, label: { formatter: 'PR阈值(-30%)' } }
+        { yAxis: 20, lineStyle: { color: '#f56c6c', type: 'dashed' }, label: { formatter: 'PD阈值(+20%)', position: 'insideEndTop' } },
+        { yAxis: -30, lineStyle: { color: '#67c23a', type: 'dashed' }, label: { formatter: 'PR阈值(-30%)', position: 'insideEndTop' } }
       ]
     }
   })
+
+  // 横坐标标签策略：标签较多或较长时旋转并加大底部留白，避免被裁切/重叠
+  const maxLabelLen = Math.max(...xData.map(l => String(l).length), 0)
+  const needRotate = xData.length > 6 || maxLabelLen > 6
 
   trendChart.setOption({
     tooltip: {
@@ -535,8 +544,32 @@ const renderTrendChart = () => {
       }
     },
     legend: { data: series.map(s => s.name), top: 5 },
-    grid: { left: 60, right: hasSld ? 60 : 20, top: 40, bottom: 40 },
-    xAxis: { type: 'category', data: xData, axisLabel: { interval: 0, rotate: xData.some(l => l.length > 8) ? 15 : 0 } },
+    grid: {
+      left: 64,
+      right: hasSld ? 64 : 24,
+      top: 56,
+      // 底部留白动态计算：旋转标签按长度估算纵向占用，未旋转按单行估算，
+      // containLabel 兜底确保不裁切；避免固定留白造成过多空白
+      bottom: needRotate
+        ? Math.min(Math.max(40, Math.round(maxLabelLen * 3.4) + 12), 78)
+        : (maxLabelLen > 4 ? 34 : 28),
+      containLabel: true
+    },
+    xAxis: {
+      type: 'category',
+      data: xData,
+      boundaryGap: true,
+      axisLabel: {
+        interval: 0,
+        rotate: needRotate ? 30 : 0,
+        align: needRotate ? 'right' : 'center',
+        verticalAlign: needRotate ? 'middle' : 'top',
+        fontSize: 12,
+        color: '#606266',
+        hideOverlap: false
+      },
+      axisTick: { alignWithLabel: true }
+    },
     yAxis: hasSld
       ? [
           { type: 'value', name: 'SLD(mm)' },
@@ -694,7 +727,7 @@ const queryRows = computed(() => {
   })
   return Array.from(map.values()).map(r => ({
     subject_id: r.subject_id,
-    visit: r.visit_name || (r.cycle_number ? `周期${r.cycle_number}` : '-'),
+    visit: r.cycle_number ? `周期${r.cycle_number}` : (r.assessment_date ? String(r.assessment_date).split('T')[0] : '-'),
     overall_status: r.overall_status || 'NE',
     target_status: r.target_status || '',
     non_target_status: r.non_target_status || '',

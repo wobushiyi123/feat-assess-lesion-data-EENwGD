@@ -129,12 +129,17 @@
             </el-table-column>
             <el-table-column label="基线状态" width="150" align="center">
               <template #default="scope">
-                <span>{{ scope.row.baselineStatus || '-' }}</span>
+                <span>{{ scope.row.baseline_status || '-' }}</span>
               </template>
             </el-table-column>
             <el-table-column label="当前状态" width="150" align="center">
               <template #default="scope">
                 <span>{{ scope.row.status || '-' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="当前检查日期" width="150" align="center">
+              <template #default="scope">
+                <span>{{ scope.row.current_exam_date || '-' }}</span>
               </template>
             </el-table-column>
           </el-table>
@@ -376,7 +381,6 @@
                 </el-form-item>
               </el-col>
             </el-row>
-            <template v-if="!isBaselineAssessment">
             <el-divider content-position="left">当前/随访数据</el-divider>
             <el-row :gutter="16">
               <el-col :span="8">
@@ -418,7 +422,6 @@
                 </el-form-item>
               </el-col>
             </el-row>
-            </template>
             <el-row :gutter="16">
               <el-col :span="12">
                 <el-form-item label="靶病灶直径和(EDC)">
@@ -507,7 +510,6 @@
                 </el-form-item>
               </el-col>
             </el-row>
-            <template v-if="!isBaselineAssessment">
             <el-divider content-position="left">当前检查信息</el-divider>
             <el-row :gutter="16">
               <el-col :span="6">
@@ -529,7 +531,6 @@
                 </el-form-item>
               </el-col>
             </el-row>
-            </template>
             <el-form-item label="备注">
               <el-input v-model="editDialog.form.notes" type="textarea" :rows="2" />
             </el-form-item>
@@ -931,9 +932,16 @@ const bestResponse = computed(() => {
   if (!fullReport.value.length) return null
   // 按疗效优先级排序：CR > PR > SD > Non-CR/Non-PD > PD > NE
   const order = { 'CR': 0, 'PR': 1, 'SD': 2, 'Non-CR/Non-PD': 3, 'PD': 4, 'NE': 5 }
-  let best = fullReport.value[0].overall
+  // 兼容后端可能存储的中/英文状态值，统一归一到排序键
+  const norm = (s) => {
+    if (!s || order[s] !== undefined) return s
+    const m = { '完全缓解': 'CR', '部分缓解': 'PR', '疾病稳定': 'SD', '疾病进展': 'PD', '无法评估': 'NE', '非完全缓解/非疾病进展': 'Non-CR/Non-PD', '非完全缓解(Non-CR)/非疾病进展(Non-PD)': 'Non-CR/Non-PD' }
+    return m[s] || s
+  }
+  let best = norm(fullReport.value[0].overall)
   fullReport.value.forEach(r => {
-    if (r.overall && (order[r.overall] ?? 9) < (order[best] ?? 9)) best = r.overall
+    const n = norm(r.overall)
+    if (n && (order[n] ?? 9) < (order[best] ?? 9)) best = n
   })
   return best ? getStatusText(best) : null
 })
@@ -989,34 +997,9 @@ const calculateFullReport = () => {
       // 是否有新病灶
       const hasNew = !!(a.has_new_lesion || (nls && nls.length > 0))
 
-      // 该周期 RECIST 评估（简化版，基于 SLD 变化 + 非靶状态 + 新病灶）
-      let overall = null
-      if (tls.length > 0 && sorted.indexOf(a) > 0) {
-        // 非基线周期：计算变化率
-        const baselineSLD = tls.reduce((sum, t) => sum + (t.baseline_size || t.baselineSize || 0), 0)
-        if (baselineSLD > 0) {
-          const changePct = ((targetSLD - baselineSLD) / baselineSLD) * 100
-          if (hasNew || changePct >= 20) overall = 'PD'
-          else if (changePct <= -30) overall = 'PR'
-          else if (changePct >= -30 && changePct < 20) overall = 'SD'
-          if (overall !== 'PD') {
-            if (ntStatus === '进展' || ntStatus === '消失') {
-              overall = ntStatus === '进展' ? 'PD' : 'CR'
-            }
-            // 靶病灶 CR 判定：所有靶病灶消失
-            if (tls.every(t => (t.current_size || t.currentSize || 0) === 0)) {
-              if (overall !== 'PD' && ntStatus !== '进展') overall = ntStatus === '消失' ? 'CR' : (overall || 'CR')
-            }
-          }
-        }
-        // 非靶完全缓解(CR)：非靶全部消失 + 无新病灶
-        if (ntStatus === '消失' && !hasNew && overall !== 'PD') {
-          overall = overall === 'PR' ? 'PR' : 'CR'
-        }
-      } else if (sorted.indexOf(a) === 0) {
-        // 基线周期不评估或标记为 NE
-        overall = 'NE'
-      }
+      // 该周期总体疗效：直接与「报告」保持一致，使用后端评估结论
+      // （人工评估 manual_overall_status 优先于程序计算 overall_status，口径与 Report.vue 完全一致）
+      const overall = a.manual_overall_status || a.overall_status || null
 
       rows.push({
         cycle: a.cycle_number || (sorted.indexOf(a) + 1),
@@ -1241,8 +1224,9 @@ const saveLesionEdit = async () => {
     Object.assign(assessment.value[listKey][editDialog.index], {
       name: localData.name,
       location: localData.location,
-      baselineStatus: localData.baseline_status,
-      status: localData.status
+      baseline_status: localData.baseline_status,
+      status: localData.status,
+      current_exam_date: localData.current_exam_date
     })
   } else {
     Object.assign(assessment.value[listKey][editDialog.index], {

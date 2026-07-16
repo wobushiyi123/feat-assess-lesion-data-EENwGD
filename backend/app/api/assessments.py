@@ -95,6 +95,20 @@ def _recompute_assessment(assessment: Assessment, db: Session) -> None:
 
     tumor_marker_normal = assessment.tumor_marker_normal if assessment.tumor_marker_normal is not None else True
 
+    # 先用引擎计算（不带确认上下文）得到初步整体状态
+    preliminary = RecistEngine.perform_assessment(
+        target_lesions=tl_dicts,
+        non_target_lesions=ntl_dicts,
+        has_new_lesion=has_new_lesion,
+        tumor_marker_normal=tumor_marker_normal,
+        nadir_sum=nadir_sld,
+        target_not_applicable=not subject_has_target,
+        non_target_not_applicable=not subject_has_ntl,
+    )
+    # 依据该受试者全部评估时间线计算 §6.3 确认规则上下文（CR/PR 适用）
+    all_subj = db.query(Assessment).filter(Assessment.subject_id == subject_id).all()
+    confirmation = RecistEngine.build_confirmation(all_subj, assessment, preliminary.overall_status)
+    # 代入确认上下文得到最终理由（含确认规则说明）
     result = RecistEngine.perform_assessment(
         target_lesions=tl_dicts,
         non_target_lesions=ntl_dicts,
@@ -103,6 +117,7 @@ def _recompute_assessment(assessment: Assessment, db: Session) -> None:
         nadir_sum=nadir_sld,
         target_not_applicable=not subject_has_target,
         non_target_not_applicable=not subject_has_ntl,
+        confirmation=confirmation,
     )
 
     risk_score = IntelligentAnalyzer.calculate_risk_score({
@@ -141,6 +156,50 @@ def _recompute_assessment(assessment: Assessment, db: Session) -> None:
     assessment.risk_score = risk_score
     assessment.ai_prediction = prediction
     db.add(assessment)
+    # 评估主日期对齐最新病灶检查日期（优先当前/随访），保证该受试者各视图时间一致
+    _sync_assessment_date(assessment, db)
+
+
+def _latest_lesion_date(assessment: Assessment, db: Session) -> Optional[str]:
+    """返回该评估下所有病灶中最新一次检查日期（YYYY-MM-DD 字符串）。
+
+    优先取「当前/随访检查日期」(current_exam_date)，其次基线检查日期(exam_date)；
+    取最大字符串即最新（YYYY-MM-DD 字典序 == 日期序）。
+    用于把评估主日期(assessment_date)与最新病灶检查日期对齐，
+    使趋势图/报告/列表等『该受试者信息』时间一致。
+    """
+    dates: list[str] = []
+    for l in db.query(TargetLesion).filter(TargetLesion.assessment_id == assessment.id).all():
+        if l.current_exam_date:
+            dates.append(str(l.current_exam_date))
+        elif l.exam_date:
+            dates.append(str(l.exam_date))
+    for l in db.query(NonTargetLesion).filter(NonTargetLesion.assessment_id == assessment.id).all():
+        if l.current_exam_date:
+            dates.append(str(l.current_exam_date))
+        elif l.exam_date:
+            dates.append(str(l.exam_date))
+    for l in db.query(NewLesion).filter(NewLesion.assessment_id == assessment.id).all():
+        if l.exam_date:
+            dates.append(str(l.exam_date))
+    return max(dates) if dates else None
+
+
+def _sync_assessment_date(assessment: Assessment, db: Session) -> None:
+    """将评估主日期同步为最新病灶检查日期（优先 current_exam_date）。
+
+    仅当存在病灶检查日期时才覆盖，避免清空已有日期；统一为 UTC 时区，
+    与 create_assessment 的 now(timezone.utc) 兜底保持一致，避免确认规则比较时
+    出现 naive/aware 混用导致 TypeError。
+    """
+    latest = _latest_lesion_date(assessment, db)
+    logger.info("[SYNC] assessment %s latest lesion date=%s", assessment.id, latest)
+    if not latest:
+        return
+    try:
+        assessment.assessment_date = datetime.fromisoformat(latest).replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        pass
 
 
 def _get_baseline_assessment(db: Session, subject_id: int) -> Assessment | None:
