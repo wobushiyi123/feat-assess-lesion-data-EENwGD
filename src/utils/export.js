@@ -138,6 +138,51 @@ export async function exportToExcelWithPicker(data, filename, sheetName = '数�
 }
 
 /**
+ * 多 Sheet 导出：将多张表写入同一工作簿，优先让用户选择保存位置
+ * @param {Array<{name:string, data:Object[]}>} sheets 每张表 { name: 工作表名, data: 扁平对象数组 }
+ * @param {string} filename 默认文件名
+ * @returns {'picker'|'download'|'cancelled'|'empty'}
+ */
+export async function exportMultiSheetExcelWithPicker(sheets, filename) {
+  if (!sheets || !sheets.length || !sheets.some(s => s.data && s.data.length)) {
+    alert('没有可导出的数据')
+    return 'empty'
+  }
+  const wb = XLSX.utils.book_new()
+  sheets.forEach(s => {
+    const ws = XLSX.utils.json_to_sheet(s.data || [])
+    ws['!cols'] = computeCols(s.data || [])
+    // Excel 工作表名上限 31 字符
+    XLSX.utils.book_append_sheet(wb, ws, (s.name || 'Sheet').slice(0, 31))
+  })
+
+  // 现代浏览器：弹出原生保存对话框，可选位置与文件名
+  if (typeof window !== 'undefined' && window.showSaveFilePicker) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: [{
+          description: 'Excel 工作簿',
+          accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] }
+        }]
+      })
+      const arrayBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+      const writable = await handle.createWritable()
+      await writable.write(arrayBuffer)
+      await writable.close()
+      return 'picker'
+    } catch (e) {
+      if (e && e.name === 'AbortError') return 'cancelled' // 用户取消
+      console.warn('showSaveFilePicker failed, fallback to download', e)
+    }
+  }
+
+  // 回退：浏览器默认下载到"下载"目录
+  XLSX.writeFile(wb, filename)
+  return 'download'
+}
+
+/**
  * 导出评估数据到 Excel（带位置选择）
  */
 export async function exportAssessmentsToExcelPicker(rows, filename = '评估数据.xlsx', sheetName = '评估数据') {

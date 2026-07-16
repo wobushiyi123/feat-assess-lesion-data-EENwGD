@@ -217,7 +217,7 @@
                   一键下发质疑
                 </el-button>
                 <span class="query-tip">
-                  {{ hasMismatch ? `当前周期存在 ${verifyRows.filter(r => r.hasMan && !r.match).length} 项不一致，点击导出所有周期的完整不一致信息到 Excel` : '系统计算与人工录入一致，无需质疑' }}
+                  {{ hasMismatch ? `当前周期存在 ${verifyRows.filter(r => r.hasMan && !r.match).length} 项不一致，点击导出全周期质疑文档（含基本信息/不一致结果/各周期病灶明细/RECIST判断标准）` : '系统计算与人工录入一致，无需质疑' }}
                 </span>
               </div>
             </section>
@@ -245,7 +245,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { subjectApi } from '../api'
-import { exportToExcelWithPicker } from '../utils/export'
+import { exportMultiSheetExcelWithPicker } from '../utils/export'
 import LesionEditDialog from '../components/LesionEditDialog.vue'
 
 const route = useRoute()
@@ -467,34 +467,116 @@ const verifyRows = computed(() => {
 })
 const hasMismatch = computed(() => verifyRows.value.some(r => r.hasMan && !r.match))
 
-// 一键下发质疑：导出该受试者「所有周期」中程序/人工不一致的完整详细信息（含自身基本信息+对比详情）
+// 一键下发质疑：导出该受试者「所有周期」的完整质疑文档（多 Sheet）
+// Sheet1 受试者信息 | Sheet2 不一致结果（最终结论）| Sheet3 各周期病灶信息 | Sheet4 RECIST 判断标准
 const sendQuery = async () => {
-  // 先收集该受试者所有周期的不一致项
-  const allMismatched = []
-  for (const a of sortedAssessments.value) {
-    const rows = buildVerifyRows(a).filter(r => r.hasMan && !r.match)
-    for (const r of rows) {
-      allMismatched.push({
-        '受试者编号': subject.value?.subject_id || '-',
-        '访视/周期': a.cycle_number ? `周期${a.cycle_number}` : (a.assessment_date ? String(a.assessment_date).split('T')[0] : '-'),
-        '检查日期': a.assessment_date ? String(a.assessment_date).split('T')[0] : '-',
+  const subj = subject.value
+  if (!subj) {
+    ElMessage.info('受试者数据未加载，无法导出')
+    return
+  }
+  const assessments = sortedAssessments.value
+  const mismatchRows = []   // 不一致结果（最终结论）
+  const lesionRows = []     // 各周期全部病灶明细
+  const cycleSet = new Set()
+
+  for (const a of assessments) {
+    const cyc = a.cycle_number ? `周期${a.cycle_number}` : (a.assessment_date ? String(a.assessment_date).split('T')[0] : '-')
+    const dateStr = a.assessment_date ? String(a.assessment_date).split('T')[0] : '-'
+    cycleSet.add(cyc)
+
+    // —— 病灶明细（靶 / 非靶 / 新）——
+    ;(a.target_lesions || []).forEach(l => {
+      lesionRows.push({
+        '周期': cyc, '检查日期': dateStr, '病灶类型': '靶病灶',
+        '编号': l.lesion_id || '',
+        '位置/器官': (l.organ || l.location || '-') + (l.is_lymph_node ? '(淋巴结)' : ''),
+        '基线长径(mm)': l.baseline_size != null && l.baseline_size !== '' ? Number(l.baseline_size).toFixed(1) : '',
+        '当前长径(mm)': l.current_size != null && l.current_size !== '' ? Number(l.current_size).toFixed(1) : '',
+        '基线状态': '-', '当前状态': '-',
+        '检查日期': l.current_exam_date || l.exam_date || ''
+      })
+    })
+    ;(a.non_target_lesions || []).forEach(l => {
+      lesionRows.push({
+        '周期': cyc, '检查日期': dateStr, '病灶类型': '非靶病灶',
+        '编号': l.lesion_id || '',
+        '位置/器官': (l.organ || l.location || '-') + (l.is_lymph_node ? '(淋巴结)' : ''),
+        '基线长径(mm)': '', '当前长径(mm)': '',
+        '基线状态': l.baseline_status || '', '当前状态': l.status || '',
+        '检查日期': l.current_exam_date || l.exam_date || ''
+      })
+    })
+    ;(a.new_lesions || []).forEach(l => {
+      lesionRows.push({
+        '周期': cyc, '检查日期': dateStr, '病灶类型': '新病灶',
+        '编号': l.lesion_id || '',
+        '位置/器官': (l.organ || l.location || '-') + (l.is_lymph_node ? '(淋巴结)' : ''),
+        '基线长径(mm)': '', '当前长径(mm)': '',
+        '基线状态': '-', '当前状态': '新检出',
+        '检查日期': l.exam_date || ''
+      })
+    })
+
+    // —— 不一致判定（程序 vs 人工）——
+    buildVerifyRows(a).filter(r => r.hasMan && !r.match).forEach(r => {
+      mismatchRows.push({
+        '受试者编号': subj.subject_id || '-',
+        '周期': cyc, '检查日期': dateStr,
         '评价维度': r.label,
         '系统计算(规则引擎)': r.sysText,
         '人工填写(EDC)': r.manText,
         '一致性': '✗ 不一致'
       })
-    }
+    })
   }
-  if (!allMismatched.length) {
+
+  if (!mismatchRows.length) {
     ElMessage.info('该受试者所有周期均无程序/人工不一致项，无需下发质疑')
     return
   }
+
+  // Sheet1：受试者基本信息
+  const infoRows = [
+    { '项目': '受试者编号', '内容': subj.subject_id || '-' },
+    { '项目': '姓名', '内容': subj.name || '-' },
+    { '项目': '性别', '内容': subj.gender || '-' },
+    { '项目': '年龄', '内容': subj.age != null ? subj.age : '-' },
+    { '项目': '诊断', '内容': subj.diagnosis || '-' },
+    { '项目': '评估周期总数', '内容': assessments.length },
+    { '项目': '不一致周期数', '内容': new Set(mismatchRows.map(r => r.周期)).size },
+    { '项目': '不一致项总数', '内容': mismatchRows.length },
+    { '项目': '导出时间', '内容': new Date().toLocaleString('zh-CN') }
+  ]
+
+  // Sheet4：RECIST 1.1 判断标准（与后端 RecistEngine 一致）
+  const criteriaRows = [
+    { '类别': '靶病灶', '判定': '完全缓解(CR)', '标准': '所有靶病灶消失（淋巴结短径<10mm）' },
+    { '类别': '靶病灶', '判定': '部分缓解(PR)', '标准': '靶病灶最长径之和(SLD)较基线下降 ≥30%（参照 nadir，即研究期间最小总和）' },
+    { '类别': '靶病灶', '判定': '疾病稳定(SD)', '标准': '缩小不足30% 且 较 nadir 增加不足20%（或绝对值增加不足5mm）' },
+    { '类别': '靶病灶', '判定': '疾病进展(PD)', '标准': 'SLD 较 nadir 增加 ≥20% 且绝对值增加 ≥5mm；或出现任何新病灶（一票否决）' },
+    { '类别': '非靶病灶', '判定': '完全缓解(CR)', '标准': '所有非靶病灶消失且无新病灶' },
+    { '类别': '非靶病灶', '判定': '非CR/非PD', '标准': '持续存在 / 非进展（Non-CR/Non-PD）' },
+    { '类别': '非靶病灶', '判定': '疾病进展(PD)', '标准': '明确进展（unequivocal progression）' },
+    { '类别': '新病灶', '判定': '有', '标准': '任何新病灶即判定为 PD，无需对照基线' },
+    { '类别': '整体评价', '判定': '综合', '标准': '综合靶+非靶+新病灶，取最差者；新病灶或 PD 维度任一命中即整体 PD' },
+    { '类别': '确认规则', '判定': 'CR / PR', '标准': '需在该次评价后 ≥4 周再次评估确认仍为 CR/PR（随机试验不强制）' },
+    { '类别': '确认规则', '判定': 'PD', '标准': '不需确认，一经判定即为进展' }
+  ]
+
+  const sheets = [
+    { name: '受试者信息', data: infoRows },
+    { name: '不一致结果', data: mismatchRows },
+    { name: '各周期病灶信息', data: lesionRows },
+    { name: 'RECIST判断标准', data: criteriaRows }
+  ]
+
   try {
-    const fn = `数据质疑_${subject.value?.subject_id || 'unknown'}_全周期_${new Date().toISOString().split('T')[0]}.xlsx`
-    const res = await exportToExcelWithPicker(allMismatched, fn, '数据质疑')
+    const fn = `数据质疑_${subj.subject_id || 'unknown'}_全周期_${new Date().toISOString().split('T')[0]}.xlsx`
+    const res = await exportMultiSheetExcelWithPicker(sheets, fn)
     if (res === 'cancelled') ElMessage.info('已取消导出')
     else if (res === 'empty') ElMessage.warning('暂无可导出的质疑数据')
-    else ElMessage.success(`已导出 ${allMismatched.length} 条不一致记录到 Excel（含所有周期，已选择保存位置）`)
+    else ElMessage.success(`已导出质疑文档（${mismatchRows.length} 项不一致 / ${assessments.length} 周期病灶明细，已选择保存位置）`)
   } catch (e) {
     console.error(e)
     ElMessage.error('导出失败：' + e.message)
