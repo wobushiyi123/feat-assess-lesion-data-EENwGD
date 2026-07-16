@@ -55,6 +55,7 @@
         <p class="footer-version">Version 1.0.0</p>
       </div>
     </footer>
+    <AIChatBot />
   </div>
 </template>
 
@@ -63,6 +64,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowRight } from '@element-plus/icons-vue'
+import AIChatBot from '../components/AIChatBot.vue'
 
 const router = useRouter()
 const route = useRoute()

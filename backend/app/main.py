@@ -1,5 +1,5 @@
 """FastAPI主应用"""
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 # Starlette 不同版本类名不一致：<1.0 为 GzipMiddleware，≥1.0 为 GZipMiddleware，做兼容导入并统一别名
@@ -13,6 +13,11 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.core.database import engine, Base
 from app.api import auth, subjects, assessments, analysis, data_io
+from app.api.chat import handle_chat, ChatResponse, ChatRequest
+from sqlalchemy.orm import Session
+from app.models.database import User
+from app.core.database import get_db
+from app.api.auth import get_current_user
 
 # 配置日志
 logging.basicConfig(
@@ -62,6 +67,15 @@ app.include_router(subjects.router)
 app.include_router(assessments.router)
 app.include_router(analysis.router)
 app.include_router(data_io.router)
+# AI 助手问答接口：直接以内联路由注册，确保挂到当前 app 实例（不使用 include_router 以规避模块二次导入导致的实例错配）
+@app.post("/api/chat/", response_model=ChatResponse)
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat_endpoint(
+    req: ChatRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return await handle_chat(req, db, current_user)
 
 
 @app.get("/")
