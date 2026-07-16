@@ -239,7 +239,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, onActivated, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
@@ -280,6 +280,10 @@ const loadSubject = async () => {
     ElMessage.error('加载受试者详情失败')
   } finally {
     loading.value = false
+    // 数据就绪后主动渲染图表（不依赖 watch 时序，确保首次进入/keep-alive 重入都能画出）
+    if (sortedAssessments.value.length && activeTab.value === 'overview') {
+      scheduleChart()
+    }
   }
 }
 
@@ -482,7 +486,13 @@ const sendQuery = async () => {
 const initChart = () => {
   const el = chartRef.value
   if (!el) return false
-  if (!chartInstance) chartInstance = echarts.init(el)
+  // 每次都 dispose + 重新 init：keep-alive 会复用组件但移除/重插 DOM，
+  // 旧 chartInstance 绑定的是脱离 DOM 的节点，setOption 会静默失效
+  if (chartInstance) {
+    chartInstance.dispose()
+    chartInstance = null
+  }
+  chartInstance = echarts.init(el)
   const labels = sortedAssessments.value.map((a, i) => nodeLabel(a, i))
   const currentValues = sortedAssessments.value.map(a => a.current_sum ?? 0)
   const baselineVal = sortedAssessments.value[0]?.baseline_sum ?? 0
@@ -563,6 +573,14 @@ watch(
 onMounted(() => {
   loadSubject()
   window.addEventListener('resize', onResize)
+})
+
+// keep-alive 重入时：DOM 已重新插入页面，但 ECharts 实例可能绑定的是旧节点
+// 需要重新渲染图表（loadSubject 在同 id 时不重复请求，由 watch/onActivated 负责画图）
+onActivated(() => {
+  if (sortedAssessments.value.length && activeTab.value === 'overview') {
+    scheduleChart()
+  }
 })
 
 // 路由参数变化（切换不同受试者）时强制重新加载，避免 Vue Router 复用组件导致显示旧受试者数据
