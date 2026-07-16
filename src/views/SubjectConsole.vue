@@ -214,10 +214,10 @@
                   :disabled="!hasMismatch"
                   @click="sendQuery"
                 >
-                  一键下发疑问 (Query)
+                  一键下发质疑
                 </el-button>
                 <span class="query-tip">
-                  {{ hasMismatch ? '存在系统计算与人工录入不一致项，可下发数据质疑' : '系统计算与人工录入一致，无需质疑' }}
+                  {{ hasMismatch ? `存在 ${verifyRows.filter(r => r.hasMan && !r.match).length} 项不一致，点击导出 Excel` : '系统计算与人工录入一致，无需质疑' }}
                 </span>
               </div>
             </section>
@@ -245,6 +245,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { subjectApi } from '../api'
+import { exportToExcelWithPicker } from '../utils/export'
 import LesionEditDialog from '../components/LesionEditDialog.vue'
 
 const route = useRoute()
@@ -466,19 +467,31 @@ const verifyRows = computed(() => {
 })
 const hasMismatch = computed(() => verifyRows.value.some(r => r.hasMan && !r.match))
 
-// 一键下发疑问（前端模拟，预留后端接口）
+// 一键下发疑问：将程序/人工不一致的数据导出为 Excel，询问保存位置
 const sendQuery = async () => {
+  const mismatched = verifyRows.value.filter(r => r.hasMan && !r.match)
+  if (!mismatched.length) {
+    ElMessage.info('当前评估无不一致项，无需下发质疑')
+    return
+  }
   try {
-    await ElMessageBox.confirm(
-      '将向临床中心发送数据质疑（Query）：系统计算结果与医生人工录入不一致，请核实。',
-      '下发数据疑问',
-      { type: 'warning', confirmButtonText: '确认下发', cancelButtonText: '取消' }
-    )
-    // TODO: 后端接口就绪后替换为真实调用，例如：
-    // await api.post(`/api/subjects/${subject.value.id}/queries`, { items: mismatchedRows })
-    ElMessage.success('已向临床中心下发数据质疑（模拟）')
+    const a = selectedAssessment.value
+    const data = mismatched.map(r => ({
+      '受试者编号': subject.value?.subject_id || '-',
+      '访视/周期': a?.cycle_number ? `周期${a.cycle_number}` : (a?.assessment_date ? String(a.assessment_date).split('T')[0] : '-'),
+      '评价维度': r.label,
+      '系统计算(规则引擎)': r.sysText,
+      '人工填写(EDC)': r.manText,
+      '一致性': r.match ? '✓ 一致' : '✗ 不一致'
+    }))
+    const fn = `数据质疑_${subject.value?.subject_id || 'unknown'}_周期${a?.cycle_number || ''}_${new Date().toISOString().split('T')[0]}.xlsx`
+    const res = await exportToExcelWithPicker(data, fn, '数据质疑')
+    if (res === 'cancelled') ElMessage.info('已取消导出')
+    else if (res === 'empty') ElMessage.warning('暂无可导出的质疑数据')
+    else ElMessage.success(`已导出 ${mismatched.length} 条不一致记录到 Excel（已选择保存位置）`)
   } catch (e) {
-    if (e !== 'cancel') console.error(e)
+    console.error(e)
+    ElMessage.error('导出失败：' + e.message)
   }
 }
 

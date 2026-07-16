@@ -311,29 +311,46 @@
         </div>
       </el-dialog>
 
-      <!-- ===== 弹窗：一键下发质疑（数据质疑清单） ===== -->
-      <el-dialog v-model="showQueryDialog" title="数据质疑清单 (Data Query)" width="1000px" top="5vh">
+      <!-- ===== 弹窗：一键下发质疑（程序/人工不一致数据） ===== -->
+      <el-dialog v-model="showQueryDialog" title="数据质疑清单 (Data Query)" width="1100px" top="5vh">
         <div class="query-tip">
-          以下为各受试者<strong>最新一次评估</strong>的综合信息，供数据质疑（下发）使用。可点击右下角「下载」并选择保存位置。
+          以下为各受试者最新一次评估中<strong>系统计算与人工录入不一致</strong>的记录。可点击右下角「下载」导出 Excel 并选择保存位置。
         </div>
-        <el-table :data="queryRows" border stripe size="small" max-height="46vh" empty-text="暂无评估数据">
+        <el-table :data="queryRows" border stripe size="small" max-height="46vh" empty-text="暂无不一致数据，无需质疑" :row-class-name="() => 'query-row'">
           <el-table-column prop="subject_id" label="受试者编号" width="120" align="center" />
-          <el-table-column prop="visit" label="访视 / 周期" min-width="170" show-overflow-tooltip />
-          <el-table-column label="总体疗效" width="120" align="center">
+          <el-table-column prop="visit" label="访视 / 周期" min-width="140" show-overflow-tooltip />
+          <el-table-column label="总体疗效(程序)" width="120" align="center">
             <template #default="{ row }">
               <el-tag :type="getStatusTagType(row.overall_status)" size="small">{{ getStatusText(row.overall_status) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="靶病灶评估" width="110" align="center">
+          <el-table-column label="总体疗效(人工)" width="120" align="center">
+            <template #default="{ row }">
+              <span v-if="row.manual_overall_status">{{ getStatusText(row.manual_overall_status) }}</span>
+              <span v-else class="text-muted">-</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="一致性" width="90" align="center">
+            <template #default="{ row }">
+              <span :class="row.overall_match === false ? 'flag-bad' : 'flag-ok'">{{ row.overall_match === false ? '✗ 不一致' : '✓ 一致' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="靶病灶(程序)" width="100" align="center">
             <template #default="{ row }">{{ row.target_status ? getStatusText(row.target_status) : '-' }}</template>
           </el-table-column>
-          <el-table-column label="非靶评估" width="100" align="center">
+          <el-table-column label="靶病灶(人工)" width="100" align="center">
+            <template #default="{ row }"><span v-if="row.manual_target_status">{{ getStatusText(row.manual_target_status) }}</span><span v-else>-</span></template>
+          </el-table-column>
+          <el-table-column label="非靶(程序)" width="95" align="center">
             <template #default="{ row }">{{ row.non_target_status ? getStatusText(row.non_target_status) : '-' }}</template>
           </el-table-column>
-          <el-table-column label="变化率" width="90" align="right">
+          <el-table-column label="非靶(人工)" width="95" align="center">
+            <template #default="{ row }"><span v-if="row.manual_non_target_status">{{ getStatusText(row.manual_non_target_status) }}</span><span v-else>-</span></template>
+          </el-table-column>
+          <el-table-column label="变化率" width="80" align="right">
             <template #default="{ row }">{{ row.change_percent != null ? Number(row.change_percent).toFixed(1) + '%' : '-' }}</template>
           </el-table-column>
-          <el-table-column prop="overall_reason" label="程序判定理由" min-width="240">
+          <el-table-column prop="overall_reason" label="程序判定理由" min-width="200">
             <template #default="{ row }"><div class="reason-text">{{ row.overall_reason }}</div></template>
           </el-table-column>
         </el-table>
@@ -713,10 +730,11 @@ const openRateDialog = (type) => {
 const showQueryDialog = ref(false)
 const queryExporting = ref(false)
 
-// 取每个受试者最新一次评估，作为质疑清单行
+// 取每个受试者最新一次评估中「程序与人工不一致」的行，作为质疑清单
 const queryRows = computed(() => {
   if (!statistics.value) return []
   const table = assessmentTable.value
+  // 先按受试者取最新一条评估
   const map = new Map()
   table.forEach(r => {
     if (!r.subject_db_id) return
@@ -725,20 +743,30 @@ const queryRows = computed(() => {
       map.set(r.subject_db_id, r)
     }
   })
-  return Array.from(map.values()).map(r => ({
-    subject_id: r.subject_id,
-    visit: r.cycle_number ? `周期${r.cycle_number}` : (r.assessment_date ? String(r.assessment_date).split('T')[0] : '-'),
-    overall_status: r.overall_status || 'NE',
-    target_status: r.target_status || '',
-    non_target_status: r.non_target_status || '',
-    change_percent: r.change_percent,
-    overall_reason: r.overall_reason || '-'
-  }))
+  // 只保留有人工数据且（整体/靶/非靶任一）不一致的行
+  return Array.from(map.values())
+    .filter(r => r.has_manual_data && (r.overall_match === false || r.target_match === false || r.non_target_match === false))
+    .map(r => ({
+      subject_id: r.subject_id,
+      visit: r.cycle_number ? `周期${r.cycle_number}` : (r.assessment_date ? String(r.assessment_date).split('T')[0] : '-'),
+      overall_status: r.overall_status || 'NE',
+      manual_overall_status: r.manual_overall_status || '',
+      target_status: r.target_status || '',
+      manual_target_status: r.manual_target_status || '',
+      non_target_status: r.non_target_status || '',
+      manual_non_target_status: r.manual_non_target_status || '',
+      change_percent: r.change_percent,
+      overall_reason: r.overall_reason || '-',
+      overall_match: r.overall_match,
+      target_match: r.target_match,
+      non_target_match: r.non_target_match,
+      has_new_lesion: r.has_new_lesion
+    }))
 })
 
 const exportQueryExcel = async () => {
   if (!queryRows.value.length) {
-    ElMessage.warning('暂无可导出的质疑数据')
+    ElMessage.warning('暂无不一致数据，无需质疑')
     return
   }
   queryExporting.value = true
@@ -746,17 +774,22 @@ const exportQueryExcel = async () => {
     const data = queryRows.value.map(r => ({
       '受试者编号': r.subject_id,
       '访视/周期': r.visit,
-      '总体疗效': getStatusText(r.overall_status),
-      '靶病灶评估': r.target_status ? getStatusText(r.target_status) : '-',
-      '非靶评估': r.non_target_status ? getStatusText(r.non_target_status) : '-',
+      '总体疗效(程序)': getStatusText(r.overall_status),
+      '总体疗效(人工)': r.manual_overall_status ? getStatusText(r.manual_overall_status) : '-',
+      '一致性(整体)': r.overall_match === false ? '✗ 不一致' : (r.overall_match === true ? '✓ 一致' : '-'),
+      '靶病灶(程序)': r.target_status ? getStatusText(r.target_status) : '-',
+      '靶病灶(人工)': r.manual_target_status ? getStatusText(r.manual_target_status) : '-',
+      '非靶(程序)': r.non_target_status ? getStatusText(r.non_target_status) : '-',
+      '非靶(人工)': r.manual_non_target_status ? getStatusText(r.manual_non_target_status) : '-',
       '变化率(%)': r.change_percent != null ? Number(r.change_percent).toFixed(1) : '-',
+      '新病灶': r.has_new_lesion ? '有' : '无',
       '程序判定理由': r.overall_reason
     }))
-    const fn = `数据质疑清单_${new Date().toISOString().split('T')[0]}.xlsx`
+    const fn = `数据质疑清单_不一致_${new Date().toISOString().split('T')[0]}.xlsx`
     const res = await exportToExcelWithPicker(data, fn, '数据质疑')
     if (res === 'cancelled') ElMessage.info('已取消导出')
     else if (res === 'empty') ElMessage.warning('暂无可导出的质疑数据')
-    else ElMessage.success('已导出质疑清单 Excel（已选择保存位置）')
+    else ElMessage.success('已导出不一致数据 Excel（已选择保存位置）')
   } catch (e) {
     console.error(e)
     ElMessage.error('导出失败：' + e.message)
@@ -1278,4 +1311,8 @@ const exportQueryExcel = async () => {
   .distribution-grid { grid-template-columns: repeat(2, 1fr); }
   .trend-cards { grid-template-columns: 1fr; }
 }
+.flag-ok { color: #67c23a; font-weight: 600; }
+.flag-bad { color: #f56c6c; font-weight: 600; }
+.query-row { background-color: #fef0f0; }
+.text-muted { color: #909399; }
 </style>
